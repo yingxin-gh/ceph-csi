@@ -54,7 +54,7 @@ func NewNodeServer(
 	t string,
 ) *NodeServer {
 	return &NodeServer{
-		DefaultNodeServer: *csicommon.NewDefaultNodeServer(d, t, map[string]string{}),
+		DefaultNodeServer: *csicommon.NewDefaultNodeServer(d, t, "", map[string]string{}, map[string]string{}),
 	}
 }
 
@@ -232,7 +232,7 @@ func (ns *NodeServer) mountNFS(
 		volumeID, source, mountPoint, mountOptions)
 	if netNamespaceFilePath != "" {
 		_, stderr, err = util.ExecuteCommandWithNSEnter(
-			ctx, netNamespaceFilePath, "mount", args[:]...)
+			ctx, netNamespaceFilePath, "mount", args...)
 	} else {
 		err = ns.Mounter.Mount(source, mountPoint, "nfs", mountOptions)
 	}

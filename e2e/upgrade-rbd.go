@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	. "github.com/onsi/ginkgo/v2" // nolint
+	. "github.com/onsi/ginkgo/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,14 +107,12 @@ var _ = Describe("RBD Upgrade Testing", func() {
 		if err != nil {
 			framework.Failf("failed to create snapshotclass: %v", err)
 		}
-
-		err = createNodeLabel(f, nodeRegionLabel, regionValue)
+		err = addLabelsToNodes(f, map[string]string{
+			nodeRegionLabel: regionValue,
+			nodeZoneLabel:   zoneValue,
+		})
 		if err != nil {
-			framework.Failf("failed to create node label: %v", err)
-		}
-		err = createNodeLabel(f, nodeZoneLabel, zoneValue)
-		if err != nil {
-			framework.Failf("failed to create node label: %v", err)
+			framework.Failf("failed to add node labels: %v", err)
 		}
 	})
 	AfterEach(func() {
@@ -130,7 +128,7 @@ var _ = Describe("RBD Upgrade Testing", func() {
 			logsCSIPods("app=csi-rbdplugin", c)
 
 			// log all details from the namespace where Ceph-CSI is deployed
-			e2edebug.DumpAllNamespaceInfo(c, cephCSINamespace)
+			e2edebug.DumpAllNamespaceInfo(context.TODO(), c, cephCSINamespace)
 		}
 
 		err := deleteConfigMap(rbdDirPath)
@@ -167,13 +165,12 @@ var _ = Describe("RBD Upgrade Testing", func() {
 				}
 			}
 		}
-		err = deleteNodeLabel(c, nodeRegionLabel)
+		err = deleteNodeLabels(c, []string{
+			nodeRegionLabel,
+			nodeZoneLabel,
+		})
 		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		err = deleteNodeLabel(c, nodeZoneLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
+			framework.Failf("failed to delete node labels: %v", err)
 		}
 	})
 
@@ -242,13 +239,13 @@ var _ = Describe("RBD Upgrade Testing", func() {
 				}
 
 				// force an immediate write of all cached data to disk.
-				_, stdErr = execCommandInPodAndAllowFail(f, fmt.Sprintf("sync %s", filePath), app.Namespace, &opt)
+				_, stdErr = execCommandInPodAndAllowFail(f, "sync "+filePath, app.Namespace, &opt)
 				if stdErr != "" {
 					framework.Failf("failed to sync data to a disk %s", stdErr)
 				}
 
 				opt = metav1.ListOptions{
-					LabelSelector: fmt.Sprintf("app=%s", appLabel),
+					LabelSelector: "app=" + appLabel,
 				}
 				framework.Logf("Calculating checksum of %s", filePath)
 				checkSum, err = calculateSHA512sum(f, app, filePath, &opt)

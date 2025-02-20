@@ -127,11 +127,12 @@ func (nv *NFSVolume) CreateExport(backend *csi.Volume) error {
 	if !nv.connected {
 		return fmt.Errorf("can not created export for %q: %w", nv, ErrNotConnected)
 	}
-
-	fs := backend.VolumeContext["fsName"]
-	nfsCluster := backend.VolumeContext["nfsCluster"]
-	path := backend.VolumeContext["subvolumePath"]
-	secTypes := backend.VolumeContext["secTypes"]
+	vctx := backend.GetVolumeContext()
+	fs := vctx["fsName"]
+	nfsCluster := vctx["nfsCluster"]
+	path := vctx["subvolumePath"]
+	secTypes := vctx["secTypes"]
+	clients := vctx["clients"]
 
 	err := nv.setNFSCluster(nfsCluster)
 	if err != nil {
@@ -155,6 +156,10 @@ func (nv *NFSVolume) CreateExport(backend *csi.Volume) error {
 		for _, secType := range strings.Split(secTypes, ",") {
 			export.SecType = append(export.SecType, nfs.SecType(secType))
 		}
+	}
+
+	if clients != "" {
+		export.ClientAddr = strings.Split(clients, ",")
 	}
 
 	_, err = nfsa.CreateCephFSExport(export)
@@ -270,14 +275,14 @@ func (nv *NFSVolume) getNFSCluster() (string, error) {
 	fs := fscore.NewFileSystem(nv.conn)
 	fsName, err := fs.GetFsName(nv.ctx, nv.fscID)
 	if err != nil && errors.Is(err, util.ErrPoolNotFound) {
-		return "", fmt.Errorf("%w for ID %x: %v", ErrFilesystemNotFound, nv.fscID, err)
+		return "", fmt.Errorf("%w for ID %x: %w", ErrFilesystemNotFound, nv.fscID, err)
 	} else if err != nil {
 		return "", fmt.Errorf("failed to get filesystem name for ID %x: %w", nv.fscID, err)
 	}
 
 	mdPool, err := fs.GetMetadataPool(nv.ctx, fsName)
 	if err != nil && errors.Is(err, util.ErrPoolNotFound) {
-		return "", fmt.Errorf("metadata pool for %q %w: %v", fsName, ErrNotFound, err)
+		return "", fmt.Errorf("metadata pool for %q %w: %w", fsName, ErrNotFound, err)
 	} else if err != nil {
 		return "", fmt.Errorf("failed to get metadata pool for %q: %w", fsName, err)
 	}
@@ -291,7 +296,7 @@ func (nv *NFSVolume) getNFSCluster() (string, error) {
 
 	clusterName, err := j.FetchAttribute(nv.ctx, mdPool, nv.objectUUID, clusterNameKey)
 	if err != nil && errors.Is(err, util.ErrPoolNotFound) || errors.Is(err, util.ErrKeyNotFound) {
-		return "", fmt.Errorf("cluster name for %q %w: %v", nv.objectUUID, ErrNotFound, err)
+		return "", fmt.Errorf("cluster name for %q %w: %w", nv.objectUUID, ErrNotFound, err)
 	} else if err != nil {
 		return "", fmt.Errorf("failed to get cluster name for %q: %w", nv.objectUUID, err)
 	}
@@ -308,14 +313,14 @@ func (nv *NFSVolume) setNFSCluster(clusterName string) error {
 	fs := fscore.NewFileSystem(nv.conn)
 	fsName, err := fs.GetFsName(nv.ctx, nv.fscID)
 	if err != nil && errors.Is(err, util.ErrPoolNotFound) {
-		return fmt.Errorf("%w for ID %x: %v", ErrFilesystemNotFound, nv.fscID, err)
+		return fmt.Errorf("%w for ID %x: %w", ErrFilesystemNotFound, nv.fscID, err)
 	} else if err != nil {
 		return fmt.Errorf("failed to get filesystem name for ID %x: %w", nv.fscID, err)
 	}
 
 	mdPool, err := fs.GetMetadataPool(nv.ctx, fsName)
 	if err != nil && errors.Is(err, util.ErrPoolNotFound) {
-		return fmt.Errorf("metadata pool for %q %w: %v", fsName, ErrNotFound, err)
+		return fmt.Errorf("metadata pool for %q %w: %w", fsName, ErrNotFound, err)
 	} else if err != nil {
 		return fmt.Errorf("failed to get metadata pool for %q: %w", fsName, err)
 	}

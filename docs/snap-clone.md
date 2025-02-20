@@ -42,10 +42,6 @@
     ./scripts/install-snapshot.sh cleanup
     ```
 
-**NOTE: At present, there is a limit of 400 snapshots per cephFS filesystem.
-Also PVC cannot be deleted if it's having snapshots. Make sure all the snapshots
-on the PVC are deleted before you delete the PVC.**
-
 ## Create CephFS Snapshot and Clone Volume
 
 ### Create CephFS SnapshotClass
@@ -60,7 +56,7 @@ The snapshot is created on/for an existing PVC. You should
 have a PVC in bound state before creating snapshot from it.
 It is recommended to create a volume snapshot or a PVC clone
 only when the PVC is not in use.
-Please refer pvc creation [doc](https://github.com/ceph/ceph-csi/blob/devel/docs/deploy-cephfs.md)
+Please refer pvc creation [doc](https://github.com/ceph/ceph-csi/blob/devel/docs/cephfs/deploy.md)
 for more information on how to create a PVC.
 
 - Verify if PVC is in Bound state

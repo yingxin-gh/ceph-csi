@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/k8s"
 	"github.com/ceph/ceph-csi/internal/util/log"
 
@@ -46,10 +47,10 @@ import (
 func (rv *rbdVolume) checkCloneImage(ctx context.Context, parentVol *rbdVolume) (bool, error) {
 	// generate temp cloned volume
 	tempClone := rv.generateTempClone()
-	defer tempClone.Destroy()
+	defer tempClone.Destroy(ctx)
 
 	snap := &rbdSnapshot{}
-	defer snap.Destroy()
+	defer snap.Destroy(ctx)
 	snap.RbdSnapName = rv.RbdImageName
 	snap.Pool = rv.Pool
 
@@ -66,7 +67,7 @@ func (rv *rbdVolume) checkCloneImage(ctx context.Context, parentVol *rbdVolume) 
 
 			return true, nil
 
-		case errors.Is(err, ErrImageNotFound):
+		case errors.Is(err, util.ErrImageNotFound):
 			// as the temp clone does not exist,check snapshot exists on parent volume
 			// snapshot name is same as temporary clone image
 			snap.RbdImageName = tempClone.RbdImageName
@@ -141,7 +142,7 @@ func (rv *rbdVolume) createCloneFromImage(ctx context.Context, parentVol *rbdVol
 	defer func() {
 		if err != nil {
 			log.DebugLog(ctx, "Removing clone image %q", rv)
-			errDefer := rv.deleteImage(ctx)
+			errDefer := rv.Delete(ctx)
 			if errDefer != nil {
 				log.ErrorLog(ctx, "failed to delete clone image %q: %v", rv, errDefer)
 			}
@@ -155,7 +156,7 @@ func (rv *rbdVolume) createCloneFromImage(ctx context.Context, parentVol *rbdVol
 		return err
 	}
 
-	err = parentVol.copyEncryptionConfig(&rv.rbdImage, true)
+	err = parentVol.copyEncryptionConfig(ctx, &rv.rbdImage, true)
 	if err != nil {
 		return fmt.Errorf("failed to copy encryption config for %q: %w", rv, err)
 	}
@@ -175,6 +176,14 @@ func (rv *rbdVolume) createCloneFromImage(ctx context.Context, parentVol *rbdVol
 		return err
 	}
 
+	// adjust rbd qos after resize volume.
+	err = rv.AdjustQOS(ctx)
+	if err != nil {
+		log.ErrorLog(ctx, "failed adjust QOS for rbd image")
+
+		return err
+	}
+
 	return nil
 }
 
@@ -183,6 +192,8 @@ func (rv *rbdVolume) doSnapClone(ctx context.Context, parentVol *rbdVolume) erro
 
 	// generate temp cloned volume
 	tempClone := rv.generateTempClone()
+	defer tempClone.Destroy(ctx)
+
 	// snapshot name is same as temporary cloned image, This helps to
 	// flatten the temporary cloned images as we cannot have more than 510
 	// snapshots on an rbd image
@@ -232,7 +243,7 @@ func (rv *rbdVolume) doSnapClone(ctx context.Context, parentVol *rbdVolume) erro
 		return errClone
 	}
 
-	err = parentVol.copyEncryptionConfig(&rv.rbdImage, true)
+	err = parentVol.copyEncryptionConfig(ctx, &rv.rbdImage, true)
 	if err != nil {
 		return fmt.Errorf("failed to copy encryption config for %q: %w", rv, err)
 	}

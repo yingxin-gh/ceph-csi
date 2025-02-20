@@ -22,12 +22,18 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/ceph/ceph-csi/api/deploy/kubernetes"
 )
 
 const (
 	// defaultCsiSubvolumeGroup defines the default name for the CephFS CSI subvolumegroup.
 	// This was hardcoded once and defaults to the old value to keep backward compatibility.
 	defaultCsiSubvolumeGroup = "csi"
+
+	// defaultCsiCephFSRadosNamespace defines the default RADOS namespace used for storing
+	// CSI-specific objects and keys for CephFS volumes.
+	defaultCsiCephFSRadosNamespace = "csi"
 
 	// CsiConfigFile is the location of the CSI config file.
 	CsiConfigFile = "/etc/ceph-csi-config/config.json"
@@ -36,43 +42,14 @@ const (
 	ClusterIDKey = "clusterID"
 )
 
-// ClusterInfo strongly typed JSON spec for the below JSON structure.
-type ClusterInfo struct {
-	// ClusterID is used for unique identification
-	ClusterID string `json:"clusterID"`
-	// RadosNamespace is a rados namespace in the pool
-	RadosNamespace string `json:"radosNamespace"` // For backward compatibility. TODO: Remove this in 3.7.0
-	// Monitors is monitor list for corresponding cluster ID
-	Monitors []string `json:"monitors"`
-	// CephFS contains CephFS specific options
-	CephFS struct {
-		// symlink filepath for the network namespace where we need to execute commands.
-		NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-		// SubvolumeGroup contains the name of the SubvolumeGroup for CSI volumes
-		SubvolumeGroup string `json:"subvolumeGroup"`
-	} `json:"cephFS"`
-
-	// RBD Contains RBD specific options
-	RBD struct {
-		// symlink filepath for the network namespace where we need to execute commands.
-		NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-		// RadosNamespace is a rados namespace in the pool
-		RadosNamespace string `json:"radosNamespace"`
-	} `json:"rbd"`
-	// NFS contains NFS specific options
-	NFS struct {
-		// symlink filepath for the network namespace where we need to execute commands.
-		NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-	} `json:"nfs"`
-}
-
 // Expected JSON structure in the passed in config file is,
-// nolint:godot // example json content should not contain unwanted dot.
+//nolint:godot // example json content should not contain unwanted dot.
 /*
 [{
 	"clusterID": "<cluster-id>",
 	"rbd": {
 		"radosNamespace": "<rados-namespace>"
+		"mirrorDaemonCount": 1
 	},
 	"monitors": [
 		"<monitor-value>",
@@ -83,8 +60,8 @@ type ClusterInfo struct {
 	}
 }]
 */
-func readClusterInfo(pathToConfig, clusterID string) (*ClusterInfo, error) {
-	var config []ClusterInfo
+func readClusterInfo(pathToConfig, clusterID string) (*kubernetes.ClusterInfo, error) {
+	var config []kubernetes.ClusterInfo
 
 	// #nosec
 	content, err := os.ReadFile(pathToConfig)
@@ -123,18 +100,45 @@ func Mons(pathToConfig, clusterID string) (string, error) {
 	return strings.Join(cluster.Monitors, ","), nil
 }
 
-// GetRadosNamespace returns the namespace for the given clusterID.
-func GetRadosNamespace(pathToConfig, clusterID string) (string, error) {
+// GetRBDRadosNamespace returns the namespace for the given clusterID.
+func GetRBDRadosNamespace(pathToConfig, clusterID string) (string, error) {
 	cluster, err := readClusterInfo(pathToConfig, clusterID)
 	if err != nil {
 		return "", err
 	}
 
-	if cluster.RBD.RadosNamespace != "" {
-		return cluster.RBD.RadosNamespace, nil
+	return cluster.RBD.RadosNamespace, nil
+}
+
+// GetCephFSRadosNamespace returns the namespace for the given clusterID.
+// If not set, it returns the default value "csi".
+func GetCephFSRadosNamespace(pathToConfig, clusterID string) (string, error) {
+	cluster, err := readClusterInfo(pathToConfig, clusterID)
+	if err != nil {
+		return "", err
 	}
 
-	return cluster.RadosNamespace, nil
+	if cluster.CephFS.RadosNamespace == "" {
+		return defaultCsiCephFSRadosNamespace, nil
+	}
+
+	return cluster.CephFS.RadosNamespace, nil
+}
+
+// GetRBDMirrorDaemonCount returns the number of mirror daemon count for the
+// given clusterID.
+func GetRBDMirrorDaemonCount(pathToConfig, clusterID string) (int, error) {
+	cluster, err := readClusterInfo(pathToConfig, clusterID)
+	if err != nil {
+		return 0, err
+	}
+
+	// if it is empty, set the default to 1 which is most common in a cluster.
+	if cluster.RBD.MirrorDaemonCount == 0 {
+		return 1, nil
+	}
+
+	return cluster.RBD.MirrorDaemonCount, nil
 }
 
 // CephFSSubvolumeGroup returns the subvolumeGroup for CephFS volumes. If not set, it returns the default value "csi".
@@ -208,4 +212,32 @@ func GetNFSNetNamespaceFilePath(pathToConfig, clusterID string) (string, error) 
 	}
 
 	return cluster.NFS.NetNamespaceFilePath, nil
+}
+
+// GetCrushLocationLabels returns the `readAffinity.enabled` and `readAffinity.crushLocationLabels`
+// values from the CSI config for the given `clusterID`. If `readAffinity.enabled` is set to true
+// it returns `true` and `crushLocationLabels`, else returns `false` and an empty string.
+func GetCrushLocationLabels(pathToConfig, clusterID string) (bool, string, error) {
+	cluster, err := readClusterInfo(pathToConfig, clusterID)
+	if err != nil {
+		return false, "", err
+	}
+
+	if !cluster.ReadAffinity.Enabled {
+		return false, "", nil
+	}
+
+	crushLocationLabels := strings.Join(cluster.ReadAffinity.CrushLocationLabels, ",")
+
+	return true, crushLocationLabels, nil
+}
+
+// GetCephFSMountOptions returns the `kernelMountOptions` and `fuseMountOptions` for CephFS volumes.
+func GetCephFSMountOptions(pathToConfig, clusterID string) (string, string, error) {
+	cluster, err := readClusterInfo(pathToConfig, clusterID)
+	if err != nil {
+		return "", "", err
+	}
+
+	return cluster.CephFS.KernelMountOptions, cluster.CephFS.FuseMountOptions, nil
 }

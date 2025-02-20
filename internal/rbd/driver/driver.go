@@ -25,7 +25,9 @@ import (
 	csiaddons "github.com/ceph/ceph-csi/internal/csi-addons/server"
 	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
 	"github.com/ceph/ceph-csi/internal/rbd"
+	"github.com/ceph/ceph-csi/internal/rbd/features"
 	"github.com/ceph/ceph-csi/internal/util"
+	"github.com/ceph/ceph-csi/internal/util/k8s"
 	"github.com/ceph/ceph-csi/internal/util/log"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -33,12 +35,10 @@ import (
 
 // Driver contains the default identity,node and controller struct.
 type Driver struct {
-	cd *csicommon.CSIDriver
-
+	cd  *csicommon.CSIDriver
 	ids *rbd.IdentityServer
 	ns  *rbd.NodeServer
 	cs  *rbd.ControllerServer
-	rs  *casrbd.ReplicationServer
 
 	// cas is the CSIAddonsServer where CSI-Addons services are handled
 	cas *csiaddons.CSIAddonsServer
@@ -62,28 +62,24 @@ func NewControllerServer(d *csicommon.CSIDriver) *rbd.ControllerServer {
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		VolumeLocks:             util.NewVolumeLocks(),
 		SnapshotLocks:           util.NewVolumeLocks(),
+		VolumeGroupLocks:        util.NewVolumeLocks(),
 		OperationLocks:          util.NewOperationLock(),
 	}
-}
-
-func NewReplicationServer(c *rbd.ControllerServer) *casrbd.ReplicationServer {
-	return &casrbd.ReplicationServer{ControllerServer: c}
 }
 
 // NewNodeServer initialize a node server for rbd CSI driver.
 func NewNodeServer(
 	d *csicommon.CSIDriver,
 	t string,
-	topology map[string]string,
-	crushLocationMap map[string]string,
-) (*rbd.NodeServer, error) {
+	nodeLabels, topology, crushLocationMap map[string]string,
+) *rbd.NodeServer {
+	cliReadAffinityMapOptions := util.ConstructReadAffinityMapOption(crushLocationMap)
 	ns := rbd.NodeServer{
-		DefaultNodeServer: csicommon.NewDefaultNodeServer(d, t, topology),
+		DefaultNodeServer: csicommon.NewDefaultNodeServer(d, t, cliReadAffinityMapOptions, topology, nodeLabels),
 		VolumeLocks:       util.NewVolumeLocks(),
 	}
-	ns.SetReadAffinityMapOptions(crushLocationMap)
 
-	return &ns, nil
+	return &ns
 }
 
 // Run start a non-blocking grpc controller,node and identityserver for
@@ -93,8 +89,8 @@ func NewNodeServer(
 // setupCSIAddonsServer().
 func (r *Driver) Run(conf *util.Config) {
 	var (
-		err                        error
-		topology, crushLocationMap map[string]string
+		err                                    error
+		nodeLabels, topology, crushLocationMap map[string]string
 	)
 	// update clone soft and hard limit
 	rbd.SetGlobalInt("rbdHardMaxCloneDepth", conf.RbdHardMaxCloneDepth)
@@ -105,14 +101,8 @@ func (r *Driver) Run(conf *util.Config) {
 	// Create instances of the volume and snapshot journal
 	rbd.InitJournals(conf.InstanceID)
 
-	// configre CSI-Addons server and components
-	err = r.setupCSIAddonsServer(conf)
-	if err != nil {
-		log.FatalLogMsg(err.Error())
-	}
-
 	// Initialize default library driver
-	r.cd = csicommon.NewCSIDriver(conf.DriverName, util.DriverVersion, conf.NodeID)
+	r.cd = csicommon.NewCSIDriver(conf.DriverName, util.DriverVersion, conf.NodeID, conf.InstanceID)
 	if r.cd == nil {
 		log.FatalLogMsg("Failed to initialize CSI Driver.")
 	}
@@ -135,13 +125,30 @@ func (r *Driver) Run(conf *util.Config) {
 				csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
 				csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
 			})
+
+		// GroupSnapGetInfo is used within the VolumeGroupSnapshot implementation
+		vgsSupported, vgsErr := features.SupportsGroupSnapGetInfo()
+		if vgsSupported {
+			r.cd.AddGroupControllerServiceCapabilities([]csi.GroupControllerServiceCapability_RPC_Type{
+				csi.GroupControllerServiceCapability_RPC_CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT,
+			})
+		} else {
+			log.DefaultLog("not enabling VolumeGroupSnapshot service capability")
+		}
+		if vgsErr != nil {
+			log.ErrorLogMsg("failed detecting VolumeGroupSnapshot support: %v", vgsErr)
+		}
+	}
+
+	if k8s.RunsOnKubernetes() && conf.IsNodeServer {
+		nodeLabels, err = k8s.GetNodeLabels(conf.NodeID)
+		if err != nil {
+			log.FatalLogMsg("%v", err.Error())
+		}
 	}
 
 	if conf.EnableReadAffinity {
-		crushLocationMap, err = util.GetCrushLocationMap(conf.CrushLocationLabels, conf.NodeID)
-		if err != nil {
-			log.FatalLogMsg(err.Error())
-		}
+		crushLocationMap = util.GetCrushLocationMap(conf.CrushLocationLabels, nodeLabels)
 	}
 
 	// Create GRPC servers
@@ -150,21 +157,19 @@ func (r *Driver) Run(conf *util.Config) {
 	if conf.IsNodeServer {
 		topology, err = util.GetTopologyFromDomainLabels(conf.DomainLabels, conf.NodeID, conf.DriverName)
 		if err != nil {
-			log.FatalLogMsg(err.Error())
+			log.FatalLogMsg("%v", err.Error())
 		}
-		r.ns, err = NewNodeServer(r.cd, conf.Vtype, topology, crushLocationMap)
-		if err != nil {
-			log.FatalLogMsg("failed to start node server, err %v\n", err)
-		}
+		r.ns = NewNodeServer(r.cd, conf.Vtype, nodeLabels, topology, crushLocationMap)
+
 		var attr string
 		attr, err = rbd.GetKrbdSupportedFeatures()
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.FatalLogMsg(err.Error())
+			log.FatalLogMsg("%v", err.Error())
 		}
 		var krbdFeatures uint
 		krbdFeatures, err = rbd.HexStringToInteger(attr)
 		if err != nil {
-			log.FatalLogMsg(err.Error())
+			log.FatalLogMsg("%v", err.Error())
 		}
 		rbd.SetGlobalInt("krbdFeatures", krbdFeatures)
 
@@ -175,9 +180,12 @@ func (r *Driver) Run(conf *util.Config) {
 		r.cs = NewControllerServer(r.cd)
 		r.cs.ClusterName = conf.ClusterName
 		r.cs.SetMetadata = conf.SetMetadata
-		log.WarningLogMsg("replication service running on controller server is deprecated " +
-			"and replaced by CSI-Addons, see https://github.com/ceph/ceph-csi/issues/3314 for more details")
-		r.rs = NewReplicationServer(r.cs)
+	}
+
+	// configure CSI-Addons server and components
+	err = r.setupCSIAddonsServer(conf)
+	if err != nil {
+		log.FatalLogMsg("%v", err.Error())
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()
@@ -185,15 +193,11 @@ func (r *Driver) Run(conf *util.Config) {
 		IS: r.ids,
 		CS: r.cs,
 		NS: r.ns,
-		// Register the replication controller to expose replication
-		// operations.
-		RS: r.rs,
+		GS: r.cs,
 	}
-	s.Start(conf.Endpoint, conf.HistogramOption, srv, conf.EnableGRPCMetrics)
-	if conf.EnableGRPCMetrics {
-		log.WarningLogMsg("EnableGRPCMetrics is deprecated")
-		go util.StartMetricsServer(conf)
-	}
+	s.Start(conf.Endpoint, srv, csicommon.MiddlewareServerOptionConfig{
+		LogSlowOpInterval: conf.LogSlowOpInterval,
+	})
 
 	r.startProfiling(conf)
 
@@ -225,23 +229,34 @@ func (r *Driver) setupCSIAddonsServer(conf *util.Config) error {
 	r.cas.RegisterService(is)
 
 	if conf.IsControllerServer {
-		rs := casrbd.NewReclaimSpaceControllerServer()
+		rs := casrbd.NewReclaimSpaceControllerServer(conf.InstanceID, r.cs.VolumeLocks)
 		r.cas.RegisterService(rs)
 
 		fcs := casrbd.NewFenceControllerServer()
 		r.cas.RegisterService(fcs)
 
-		rcs := NewReplicationServer(NewControllerServer(r.cd))
+		rcs := casrbd.NewReplicationServer(conf.InstanceID, NewControllerServer(r.cd))
 		r.cas.RegisterService(rcs)
+
+		vgcs := casrbd.NewVolumeGroupServer(conf.InstanceID)
+		r.cas.RegisterService(vgcs)
 	}
 
 	if conf.IsNodeServer {
-		rs := casrbd.NewReclaimSpaceNodeServer()
+		fcs := casrbd.NewFenceControllerServer()
+		r.cas.RegisterService(fcs)
+
+		rs := casrbd.NewReclaimSpaceNodeServer(r.ns.VolumeLocks)
 		r.cas.RegisterService(rs)
+
+		ekr := casrbd.NewEncryptionKeyRotationServer(conf.InstanceID, r.ns.VolumeLocks)
+		r.cas.RegisterService(ekr)
 	}
 
 	// start the server, this does not block, it runs a new go-routine
-	err = r.cas.Start()
+	err = r.cas.Start(csicommon.MiddlewareServerOptionConfig{
+		LogSlowOpInterval: conf.LogSlowOpInterval,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to start CSI-Addons server: %w", err)
 	}
@@ -253,9 +268,7 @@ func (r *Driver) setupCSIAddonsServer(conf *util.Config) error {
 // starts the required profiling services.
 func (r *Driver) startProfiling(conf *util.Config) {
 	if conf.EnableProfiling {
-		if !conf.EnableGRPCMetrics {
-			go util.StartMetricsServer(conf)
-		}
+		go util.StartMetricsServer(conf)
 		log.DebugLogMsg("Registering profiling handler")
 		go util.EnableProfiling()
 	}

@@ -31,7 +31,7 @@ import (
 var (
 	availableMounters []string
 
-	// nolint:gomnd // numbers specify Kernel versions.
+	//nolint:mnd // numbers specify Kernel versions.
 	quotaSupport = []util.KernelVersion{
 		{
 			Version:      4,
@@ -131,7 +131,7 @@ func New(volOptions *store.VolumeOptions) (VolumeMounter, error) {
 	case volumeMounterFuse:
 		return &FuseMounter{}, nil
 	case volumeMounterKernel:
-		return &KernelMounter{}, nil
+		return NewKernelMounter(), nil
 	}
 
 	return nil, fmt.Errorf("unknown mounter '%s'", chosenMounter)

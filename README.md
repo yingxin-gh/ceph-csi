@@ -35,9 +35,9 @@ attaching them to workloads.
 Independent CSI plugins are provided to support RBD and CephFS backed volumes,
 
 - For details about configuration and deployment of RBD plugin, please refer
-  [rbd doc](https://github.com/ceph/ceph-csi/blob/devel/docs/deploy-rbd.md) and
+  [rbd doc](https://github.com/ceph/ceph-csi/blob/devel/docs/rbd/deploy.md) and
   for CephFS plugin configuration and deployment please
-  refer [cephFS doc](https://github.com/ceph/ceph-csi/blob/devel/docs/deploy-cephfs.md).
+  refer [cephFS doc](https://github.com/ceph/ceph-csi/blob/devel/docs/cephfs/deploy.md).
 - For example usage of the RBD and CephFS CSI plugins, see examples in `examples/`.
 - Stale resource cleanup, please refer [cleanup doc](docs/resource-cleanup.md).
 
@@ -54,12 +54,10 @@ Status: **GA**
 Ceph CSI drivers are currently developed and tested **exclusively** in Kubernetes
 environments.
 
-| Ceph CSI Version | Container Orchestrator Name | Version Tested|
-| -----------------| --------------------------- | --------------|
-| v3.8.0 | Kubernetes | v1.24, v1.25, v1.26, v1.27|
-| v3.7.2 | Kubernetes | v1.22, v1.23, v1.24|
-| v3.7.1 | Kubernetes | v1.22, v1.23, v1.24|
-| v3.7.0 | Kubernetes | v1.22, v1.23, v1.24|
+| Ceph CSI Version | Container Orchestrator Name | Version Tested     |
+| -----------------| --------------------------- | -------------------|
+| v3.13.0          | Kubernetes                  | v1.29, v1.30, v1.31|
+| v3.12.3          | Kubernetes                  | v1.29, v1.30, v1.31|
 
 There is work in progress to make this CO-independent and thus
 support other orchestration environments (Nomad, Mesos..etc).
@@ -69,52 +67,53 @@ NOTE:
 The supported window of Ceph CSI versions is "N.(x-1)":
 (N (Latest major release) . (x (Latest minor release) - 1)).
 
-For example, if the Ceph CSI latest major version is `3.8.0` today, support is
-provided for the versions above `3.7.0`. If users are running an unsupported
+For example, if the Ceph CSI latest major version is `3.9.0` today, support is
+provided for the versions above `3.8.0`. If users are running an unsupported
 Ceph CSI version, they will be asked to upgrade when requesting support.
 
 ## Support Matrix
 
 ### Ceph-CSI features and available versions
 
-Please refer [rbd nbd mounter](./docs/rbd-nbd.md#support-matrix)
+Please refer [rbd nbd mounter](./docs/design/proposals/rbd-nbd.md#support-matrix)
 for its support details.
 
 | Plugin | Features                                                  | Feature Status | CSI Driver Version | CSI Spec Version | Ceph Cluster Version | Kubernetes Version |
 | ------ | --------------------------------------------------------- | -------------- | ------------------ | ---------------- | -------------------- | ------------------ |
-| RBD    | Dynamically provision, de-provision Block mode RWO volume | GA             | >= v1.0.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.14.0         |
-|        | Dynamically provision, de-provision Block mode RWX volume | GA             | >= v1.0.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.14.0         |
-|        | Dynamically provision, de-provision Block mode RWOP volume| Alpha          | >= v3.5.0          | >= v1.5.0        | Octopus (>=15.0.0)  | >= v1.22.0         |
-|        | Dynamically provision, de-provision File mode RWO volume  | GA             | >= v1.0.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode RWOP volume | Alpha          | >= v3.5.0          | >= v1.5.0        | Octopus (>=15.0.0)  | >= v1.22.0         |
-|        | Provision File Mode ROX volume from snapshot              | Alpha          | >= v3.0.0          | >= v1.0.0        | Octopus (>=v15.0.0) | >= v1.17.0         |
-|        | Provision File Mode ROX volume from another volume        | Alpha          | >= v3.0.0          | >= v1.0.0        | Octopus (>=v15.0.0) | >= v1.16.0         |
-|        | Provision Block Mode ROX volume from snapshot             | Alpha          | >= v3.0.0          | >= v1.0.0        | Octopus (>=v15.0.0) | >= v1.17.0         |
-|        | Provision Block Mode ROX volume from another volume       | Alpha          | >= v3.0.0          | >= v1.0.0        | Octopus (>=v15.0.0) | >= v1.16.0         |
-|        | Creating and deleting snapshot                            | GA             | >= v1.0.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.17.0         |
-|        | Provision volume from snapshot                            | GA             | >= v1.0.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.17.0         |
-|        | Provision volume from another volume                      | GA             | >= v1.0.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.16.0         |
-|        | Expand volume                                             | Beta           | >= v2.0.0          | >= v1.1.0        | Octopus (>=15.0.0)  | >= v1.15.0         |
-|        | Volume/PV Metrics of File Mode Volume                     | GA             | >= v1.2.0          | >= v1.1.0        | Octopus (>=15.0.0)  | >= v1.15.0         |
-|        | Volume/PV Metrics of Block Mode Volume                    | GA             | >= v1.2.0          | >= v1.1.0        | Octopus (>=15.0.0)  | >= v1.21.0         |
-|        | Topology Aware Provisioning Support                       | Alpha          | >= v2.1.0          | >= v1.1.0        | Octopus (>=15.0.0)  | >= v1.14.0         |
-| CephFS | Dynamically provision, de-provision File mode RWO volume  | GA             | >= v1.1.0          | >= v1.0.0        | Octopus (>=15.0.0)  | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode RWX volume  | GA             | >= v1.1.0          | >= v1.0.0        | Octopus (>=v15.0.0) | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode ROX volume  | Alpha          | >= v3.0.0          | >= v1.0.0        | Octopus (>=v15.0.0) | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode RWOP volume | Alpha          | >= v3.5.0          | >= v1.5.0        | Octopus (>=15.0.0)  | >= v1.22.0         |
-|        | Creating and deleting snapshot                            | GA             | >= v3.1.0          | >= v1.0.0        | Octopus (>=v15.2.4)  | >= v1.17.0         |
-|        | Provision volume from snapshot                            | GA             | >= v3.1.0          | >= v1.0.0        | Octopus (>=v15.2.4)  | >= v1.17.0         |
-|        | Provision volume from another volume                      | GA             | >= v3.1.0          | >= v1.0.0        | Octopus (>=v15.2.4)  | >= v1.16.0         |
-|        | Expand volume                                             | Beta           | >= v2.0.0          | >= v1.1.0        | Octopus (>=v15.0.0) | >= v1.15.0         |
-|        | Volume/PV Metrics of File Mode Volume                     | GA             | >= v1.2.0          | >= v1.1.0        | Octopus (>=v15.0.0) | >= v1.15.0         |
-| NFS    | Dynamically provision, de-provision File mode RWO volume  | Alpha          | >= v3.6.0          | >= v1.0.0        | Pacific (>=16.2.0)   | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode RWX volume  | Alpha          | >= v3.6.0          | >= v1.0.0        | Pacific (>=16.2.0)   | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode ROX volume  | Alpha          | >= v3.6.0          | >= v1.0.0        | Pacific (>=16.2.0)   | >= v1.14.0         |
-|        | Dynamically provision, de-provision File mode RWOP volume | Alpha          | >= v3.6.0          | >= v1.5.0        | Pacific (>=16.2.0)   | >= v1.22.0         |
-|        | Expand volume                                             | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=16.2.0)   | >= v1.15.0         |
-|        | Creating and deleting snapshot                            | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=16.2.0)   | >= v1.17.0         |
-|        | Provision volume from snapshot                            | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=16.2.0)   | >= v1.17.0         |
-|        | Provision volume from another volume                      | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=16.2.0)   | >= v1.16.0         |
+| RBD    | Dynamically provision, de-provision Block mode RWO volume | GA             | >= v1.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision Block mode RWX volume | GA             | >= v1.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision Block mode RWOP volume| Alpha          | >= v3.5.0          | >= v1.5.0        | Pacific (>=v16.2.0)  | >= v1.22.0         |
+|        | Dynamically provision, de-provision File mode RWO volume  | GA             | >= v1.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode RWOP volume | Alpha          | >= v3.5.0          | >= v1.5.0        | Pacific (>=v16.2.0)  | >= v1.22.0         |
+|        | Provision File Mode ROX volume from snapshot              | Alpha          | >= v3.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision File Mode ROX volume from another volume        | Alpha          | >= v3.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.16.0         |
+|        | Provision Block Mode ROX volume from snapshot             | Alpha          | >= v3.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision Block Mode ROX volume from another volume       | Alpha          | >= v3.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.16.0         |
+|        | Creating and deleting snapshot                            | GA             | >= v1.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision volume from snapshot                            | GA             | >= v1.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision volume from another volume                      | GA             | >= v1.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.16.0         |
+|        | Expand volume                                             | Beta           | >= v2.0.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.15.0         |
+|        | Volume/PV Metrics of File Mode Volume                     | GA             | >= v1.2.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.15.0         |
+|        | Volume/PV Metrics of Block Mode Volume                    | GA             | >= v1.2.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.21.0         |
+|        | Topology Aware Provisioning Support                       | Alpha          | >= v2.1.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+| CephFS | Dynamically provision, de-provision File mode RWO volume  | GA             | >= v1.1.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode RWX volume  | GA             | >= v1.1.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode ROX volume  | Alpha          | >= v3.0.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode RWOP volume | Alpha          | >= v3.5.0          | >= v1.5.0        | Pacific (>=v16.2.0)  | >= v1.22.0         |
+|        | Creating and deleting snapshot                            | GA             | >= v3.1.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Creating and deleting volume group snapshot               | Alpha          | >= v3.11.0         | >= v1.9.0       | Squid   (>=v19.0.0)  | >= v1.31.0         |
+|        | Provision volume from snapshot                            | GA             | >= v3.1.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision volume from another volume                      | GA             | >= v3.1.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.16.0         |
+|        | Expand volume                                             | Beta           | >= v2.0.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.15.0         |
+|        | Volume/PV Metrics of File Mode Volume                     | GA             | >= v1.2.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.15.0         |
+| NFS    | Dynamically provision, de-provision File mode RWO volume  | Alpha          | >= v3.6.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode RWX volume  | Alpha          | >= v3.6.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode ROX volume  | Alpha          | >= v3.6.0          | >= v1.0.0        | Pacific (>=v16.2.0)  | >= v1.14.0         |
+|        | Dynamically provision, de-provision File mode RWOP volume | Alpha          | >= v3.6.0          | >= v1.5.0        | Pacific (>=v16.2.0)  | >= v1.22.0         |
+|        | Expand volume                                             | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.15.0         |
+|        | Creating and deleting snapshot                            | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision volume from snapshot                            | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.17.0         |
+|        | Provision volume from another volume                      | Alpha          | >= v3.7.0          | >= v1.1.0        | Pacific (>=v16.2.0)  | >= v1.16.0         |
 
 `NOTE`: The `Alpha` status reflects possible non-backward
 compatible changes in the future, and is thus not recommended
@@ -130,13 +129,21 @@ in the Kubernetes documentation.
 | Ceph CSI Release/Branch | Container image name         | Image Tag |
 | ----------------------- | ---------------------------- | --------- |
 | devel (Branch)          | quay.io/cephcsi/cephcsi      | canary    |
-| v3.8.0 (Release)        | quay.io/cephcsi/cephcsi      | v3.8.0    |
-| v3.7.2 (Release)        | quay.io/cephcsi/cephcsi      | v3.7.2    |
-| v3.7.1 (Release)        | quay.io/cephcsi/cephcsi      | v3.7.1    |
-| v3.7.0 (Release)        | quay.io/cephcsi/cephcsi      | v3.7.0    |
+| v3.13.0 (Release)       | quay.io/cephcsi/cephcsi      | v3.13.0   |
+| v3.12.3 (Release)       | quay.io/cephcsi/cephcsi      | v3.12.3   |
 
 | Deprecated Ceph CSI Release/Branch | Container image name | Image Tag |
 | ----------------------- | --------------------------------| --------- |
+| v3.11.0 (Release)       | quay.io/cephcsi/cephcsi         | v3.11.0   |
+| v3.10.2 (Release)       | quay.io/cephcsi/cephcsi         | v3.10.2   |
+| v3.10.1 (Release)       | quay.io/cephcsi/cephcsi         | v3.10.1   |
+| v3.10.0 (Release)       | quay.io/cephcsi/cephcsi         | v3.10.0   |
+| v3.9.0 (Release)        | quay.io/cephcsi/cephcsi         | v3.9.0    |
+| v3.8.1 (Release)        | quay.io/cephcsi/cephcsi         | v3.8.1    |
+| v3.8.0 (Release)        | quay.io/cephcsi/cephcsi         | v3.8.0    |
+| v3.7.2 (Release)        | quay.io/cephcsi/cephcsi         | v3.7.2    |
+| v3.7.1 (Release)        | quay.io/cephcsi/cephcsi         | v3.7.1    |
+| v3.7.0 (Release)        | quay.io/cephcsi/cephcsi         | v3.7.0    |
 | v3.6.1 (Release)        | quay.io/cephcsi/cephcsi         | v3.6.1    |
 | v3.6.0 (Release)        | quay.io/cephcsi/cephcsi         | v3.6.0    |
 | v3.5.1 (Release)        | quay.io/cephcsi/cephcsi         | v3.5.1    |
@@ -180,7 +187,7 @@ More details are available [here](https://github.com/ceph/ceph-csi/issues/463)
 
 ## Dev standup
 
-A regular dev standup takes place every [Tuesday at
+A regular dev standup takes place every [Monday at
 12:00 PM UTC](https://meet.google.com/vit-qdhw-nyh) Convert to your local
 timezone by executing command `date -d "12:00 UTC"` on terminal
 
@@ -198,8 +205,8 @@ welcome and encouraged to join.
 
 Please use the following to reach members of the community:
 
-- Slack: Join our [Slack channel](https://ceph-storage.slack.com) to discuss
-  anything related to this project. You can join the Slack by this [invite
-  link](https://bit.ly/40FQu7u)
-- Forums: [ceph-csi](https://groups.google.com/forum/#!forum/ceph-csi)
-- Twitter: [@CephCsi](https://twitter.com/CephCsi)
+- Slack: Join the
+  [#ceph-csi](https://ceph-storage.slack.com/archives/C05522L7P60) channel
+  on the [ceph Slack](https://ceph-storage.slack.com) to discuss anything
+  related to this project. You can join the Slack by this
+  [invite link](https://bit.ly/ceph-slack-invite)

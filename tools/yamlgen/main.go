@@ -22,6 +22,7 @@ import (
 	"path"
 	"reflect"
 
+	"github.com/ceph/ceph-csi/api/deploy/kubernetes/cephfs"
 	"github.com/ceph/ceph-csi/api/deploy/kubernetes/nfs"
 	"github.com/ceph/ceph-csi/api/deploy/kubernetes/rbd"
 	"github.com/ceph/ceph-csi/api/deploy/ocp"
@@ -49,6 +50,16 @@ var yamlArtifacts = []deploymentArtifact{
 		reflect.ValueOf(ocp.SecurityContextConstraintsDefaults),
 	},
 	{
+		"../deploy/cephfs/kubernetes/csidriver.yaml",
+		reflect.ValueOf(cephfs.NewCSIDriverYAML),
+		reflect.ValueOf(cephfs.CSIDriverDefaults),
+	},
+	{
+		"../deploy/cephfs/kubernetes/csi-config-map.yaml",
+		reflect.ValueOf(cephfs.NewCSIConfigMapYAML),
+		reflect.ValueOf(cephfs.CSIConfigMapDefaults),
+	},
+	{
 		"../deploy/nfs/kubernetes/csidriver.yaml",
 		reflect.ValueOf(nfs.NewCSIDriverYAML),
 		reflect.ValueOf(nfs.CSIDriverDefaults),
@@ -57,6 +68,11 @@ var yamlArtifacts = []deploymentArtifact{
 		"../deploy/nfs/kubernetes/csi-config-map.yaml",
 		reflect.ValueOf(nfs.NewCSIConfigMapYAML),
 		reflect.ValueOf(nfs.CSIConfigMapDefaults),
+	},
+	{
+		"../deploy/nfs/kubernetes/csi-provisioner-rbac.yaml",
+		reflect.ValueOf(nfs.NewCSIProvisionerRBACYAML),
+		reflect.ValueOf(nfs.CSIProvisionerRBACDefaults),
 	},
 	{
 		"../deploy/rbd/kubernetes/csidriver.yaml",

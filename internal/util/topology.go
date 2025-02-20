@@ -17,37 +17,23 @@ limitations under the License.
 package util
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
+
 	"github.com/ceph/ceph-csi/internal/util/k8s"
 	"github.com/ceph/ceph-csi/internal/util/log"
-
-	"github.com/container-storage-interface/spec/lib/go/csi"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
 	keySeparator   rune   = '/'
 	labelSeparator string = ","
+
+	// topologyPoolsParam is the parameter name used to pass topology constrained pools.
+	topologyPoolsParam = "topologyConstrainedPools"
 )
-
-func k8sGetNodeLabels(nodeName string) (map[string]string, error) {
-	client, err := k8s.NewK8sClient()
-	if err != nil {
-		return nil, fmt.Errorf("can not get node %q information, failed "+
-			"to connect to Kubernetes: %w", nodeName, err)
-	}
-
-	node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get node %q information: %w", nodeName, err)
-	}
-
-	return node.GetLabels(), nil
-}
 
 // GetTopologyFromDomainLabels returns the CSI topology map, determined from
 // the domain labels and their values from the CO system
@@ -66,7 +52,7 @@ func GetTopologyFromDomainLabels(domainLabels, nodeName, driverName string) (map
 	// driverName is validated, and we are adding a lowercase "topology." to it, so no validation for conformance
 
 	// Convert passed in labels to a map, and check for uniqueness
-	labelsToRead := strings.SplitN(domainLabels, labelSeparator, -1)
+	labelsToRead := strings.Split(domainLabels, labelSeparator)
 	log.DefaultLog("passed in node labels for processing: %+v", labelsToRead)
 
 	labelsIn := make(map[string]bool)
@@ -82,7 +68,7 @@ func GetTopologyFromDomainLabels(domainLabels, nodeName, driverName string) (map
 		labelCount++
 	}
 
-	nodeLabels, err := k8sGetNodeLabels(nodeName)
+	nodeLabels, err := k8s.GetNodeLabels(nodeName)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +132,7 @@ func GetTopologyFromRequest(
 	var topologyPools []TopologyConstrainedPool
 
 	// check if parameters have pool configuration pertaining to topology
-	topologyPoolsStr := req.GetParameters()["topologyConstrainedPools"]
+	topologyPoolsStr := req.GetParameters()[topologyPoolsParam]
 	if topologyPoolsStr == "" {
 		return nil, nil, nil
 	}
@@ -158,7 +144,7 @@ func GetTopologyFromRequest(
 	}
 
 	// extract topology based pools configuration
-	err := json.Unmarshal([]byte(strings.Replace(topologyPoolsStr, "\n", " ", -1)), &topologyPools)
+	err := json.Unmarshal([]byte(strings.ReplaceAll(topologyPoolsStr, "\n", " ")), &topologyPools)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"failed to parse JSON encoded topology constrained pools parameter (%s): %w",
@@ -225,7 +211,7 @@ func FindPoolAndTopology(topologyPools *[]TopologyConstrainedPool,
 
 	return "", "", nil, fmt.Errorf("none of the topology constrained pools matched requested "+
 		"topology constraints : pools (%+v) requested topology (%+v)",
-		*topologyPools, *accessibilityRequirements)
+		*topologyPools, accessibilityRequirements)
 }
 
 // matchPoolToTopology loops through passed in pools, and for each pool checks if all

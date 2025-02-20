@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -54,12 +54,11 @@ func TestIsMigrationVolID(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		newtt := tt
-		t.Run(newtt.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := isMigrationVolID(newtt.args)
-			if got != newtt.migVolID {
-				t.Errorf("isMigrationVolID() = %v, want %v", got, newtt.migVolID)
+			got := isMigrationVolID(tt.args)
+			if got != tt.migVolID {
+				t.Errorf("isMigrationVolID() = %v, want %v", got, tt.migVolID)
 			}
 		})
 	}
@@ -156,17 +155,16 @@ func TestParseMigrationVolID(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		newtt := tt
-		t.Run(newtt.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := parseMigrationVolID(newtt.args)
-			if (err != nil) != newtt.wantErr {
-				t.Errorf("ParseMigrationVolID() error = %v, wantErr %v", err, newtt.wantErr)
+			got, err := parseMigrationVolID(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseMigrationVolID() error = %v, wantErr %v", err, tt.wantErr)
 
 				return
 			}
-			if !reflect.DeepEqual(got, newtt.want) {
-				t.Errorf("ParseMigrationVolID() got = %v, want %v", got, newtt.want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ParseMigrationVolID() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -24,8 +24,8 @@ it is **highly** encouraged to:
 * Ceph-CSI uses the native Ceph libraries through the [go-ceph
    package](https://github.com/ceph/go-ceph). It is required to install the
    Ceph C headers in order to compile Ceph-CSI. The packages are called
-   `librados-devel` and `librbd-devel` on many Linux distributions. See the
-   [go-ceph installation
+   `librados-devel` , `librbd-devel` and `libcephfs-devel`
+   on many Linux distributions. See the [go-ceph installation
    instructions](https://github.com/ceph/go-ceph#installation) for more
    details.
 * Run
@@ -278,8 +278,11 @@ need to be met before it will be merged:
   on the PR. The bot will merge the PR if it's having one approval and the
   label `ready-to-merge`.
 
-When the criteria are met, a project maintainer can merge your changes into
-the project's devel branch.
+When the criteria are met, a project maintainer can instruct the Mergify bot to
+queue the PR for merging. This usually is done by leaving two comments:
+
+* `@mergifyio rebase` to rebase on the latest HEAD of the branch
+* `@mergifyio queue` once the rebasing is done, to add the PR to the merge queue
 
 ### Backport a Fix to a Release Branch
 
@@ -299,12 +302,6 @@ The CI Jobs gets triggered automatically on these events, such as on
 opening fresh PRs, rebase of PRs and force pushing changes to existing PRs.
 
 Right now, we also have below commands to manually retrigger the CI jobs
-
-1. To retrigger all the CI jobs, comment the PR with command: `/retest all`
-
-   **Note**:
-
-   This will rerun all the jobs including the jobs which are already passed
 
 1. To retrigger a specific CI job, comment the PR with command: `/retest <job-name>`
 

@@ -14,12 +14,13 @@ limitations under the License.
 package util
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	kmsapi "github.com/ceph/ceph-csi/internal/kms"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetPassphraseFromKMS(t *testing.T) {
@@ -30,23 +31,23 @@ func TestGetPassphraseFromKMS(t *testing.T) {
 			continue
 		}
 		kms := kmsapi.GetKMSTestDummy(provider.UniqueID)
-		assert.NotNil(t, kms)
+		require.NotNil(t, kms)
 
 		volEnc, err := NewVolumeEncryption(provider.UniqueID, kms)
 		if errors.Is(err, ErrDEKStoreNeeded) {
-			_, err = volEnc.KMS.GetSecret("")
+			_, err = volEnc.KMS.GetSecret(context.TODO(), "")
 			if errors.Is(err, kmsapi.ErrGetSecretUnsupported) {
 				continue // currently unsupported by fscrypt integration
 			}
 		}
-		assert.NotNil(t, volEnc)
+		require.NotNil(t, volEnc)
 
 		if kms.RequiresDEKStore() == kmsapi.DEKStoreIntegrated {
 			continue
 		}
 
-		secret, err := kms.GetSecret("")
-		assert.NoError(t, err, provider.UniqueID)
-		assert.NotEmpty(t, secret, provider.UniqueID)
+		secret, err := kms.GetSecret(context.TODO(), "")
+		require.NoError(t, err, provider.UniqueID)
+		require.NotEmpty(t, secret, provider.UniqueID)
 	}
 }

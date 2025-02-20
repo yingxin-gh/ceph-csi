@@ -23,9 +23,11 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/ceph/ceph-csi/internal/util/k8s"
 	"github.com/ceph/ceph-csi/internal/util/log"
 
 	"golang.org/x/sys/unix"
@@ -67,9 +69,9 @@ func RoundOffCephFSVolSize(bytes int64) int64 {
 		return 4 * helpers.MiB
 	}
 
-	bytes /= helpers.MiB
+	bytesInFloat := float64(bytes) / helpers.MiB
 
-	bytes = int64(math.Ceil(float64(bytes)/4) * 4)
+	bytes = int64(math.Ceil(bytesInFloat/4) * 4)
 
 	return RoundOffBytes(bytes * helpers.MiB)
 }
@@ -93,36 +95,19 @@ type Config struct {
 	PluginPath      string // location of cephcsi plugin
 	StagingPath     string // location of cephcsi staging path
 	DomainLabels    string // list of domain labels to read from the node
-
 	// metrics related flags
-	MetricsPath     string // path of prometheus endpoint where metrics will be available
-	HistogramOption string // Histogram option for grpc metrics, should be comma separated value,
-	// ex:= "0.5,2,6" where start=0.5 factor=2, count=6
-	MetricsIP string // TCP port for liveness/ metrics requests
+	MetricsPath string // path of prometheus endpoint where metrics will be available
+	MetricsIP   string // TCP port for liveness/ metrics requests
+
+	// CSI-Addons endpoint
+	CSIAddonsEndpoint string
+
+	// Cluster name
+	ClusterName string
 
 	// mount option related flags
 	KernelMountOptions string // Comma separated string of mount options accepted by cephfs kernel mounter
 	FuseMountOptions   string // Comma separated string of mount options accepted by ceph-fuse mounter
-
-	PidLimit          int           // PID limit to configure through cgroups")
-	MetricsPort       int           // TCP port for liveness/grpc metrics requests
-	PollTime          time.Duration // time interval in seconds between each poll
-	PoolTimeout       time.Duration // probe timeout in seconds
-	EnableGRPCMetrics bool          // option to enable grpc metrics
-
-	EnableProfiling    bool // flag to enable profiling
-	IsControllerServer bool // if set to true start provisioner server
-	IsNodeServer       bool // if set to true start node server
-	Version            bool // cephcsi version
-
-	// SkipForceFlatten is set to false if the kernel supports mounting of
-	// rbd image or the image chain has the deep-flatten feature.
-	SkipForceFlatten bool
-
-	// cephfs related flags
-	ForceKernelCephFS bool // force to use the ceph kernel client even if the kernel is < 4.17
-
-	SetMetadata bool // set metadata on the volume
 
 	// RbdHardMaxCloneDepth is the hard limit for maximum number of nested volume clones that are taken before a flatten
 	// occurs
@@ -142,11 +127,27 @@ type Config struct {
 	// reached cephcsi will start flattening the older rbd images.
 	MinSnapshotsOnImage uint
 
-	// CSI-Addons endpoint
-	CSIAddonsEndpoint string
+	PidLimit    int           // PID limit to configure through cgroups")
+	MetricsPort int           // TCP port for liveness/grpc metrics requests
+	PollTime    time.Duration // time interval in seconds between each poll
+	PoolTimeout time.Duration // probe timeout in seconds
+	// Log interval for slow GRPC calls. Calls that outlive their context deadline
+	// are considered slow.
+	LogSlowOpInterval time.Duration
 
-	// Cluster name
-	ClusterName string
+	EnableProfiling    bool // flag to enable profiling
+	IsControllerServer bool // if set to true start provisioner server
+	IsNodeServer       bool // if set to true start node server
+	Version            bool // cephcsi version
+
+	// SkipForceFlatten is set to false if the kernel supports mounting of
+	// rbd image or the image chain has the deep-flatten feature.
+	SkipForceFlatten bool
+
+	// cephfs related flags
+	ForceKernelCephFS    bool   // force to use the ceph kernel client even if the kernel is < 4.17
+	RadosNamespaceCephFS string // RadosNamespace used to store CSI specific objects and keys
+	SetMetadata          bool   // set metadata on the volume
 
 	// Read affinity related options
 	EnableReadAffinity  bool   // enable OSD read affinity.
@@ -214,7 +215,7 @@ func parseKernelRelease(release string) (int, int, int, int, error) {
 	extraversion := 0
 	if n > minVersions {
 		n, err = fmt.Sscanf(extra, ".%d%s", &sublevel, &extra)
-		if err != nil && n == 0 && len(extra) > 0 && extra[0] != '-' && extra[0] == '.' {
+		if err != nil && n == 0 && extra != "" && extra[0] != '-' && extra[0] == '.' {
 			return 0, 0, 0, 0, fmt.Errorf("failed to parse subversion from %s: %w", release, err)
 		}
 
@@ -290,7 +291,6 @@ func GenerateVolID(
 	cr *Credentials,
 	locationID int64,
 	pool, clusterID, objUUID string,
-	volIDVersion uint16,
 ) (string, error) {
 	var err error
 
@@ -303,10 +303,9 @@ func GenerateVolID(
 
 	// generate the volume ID to return to the CO system
 	vi := CSIIdentifier{
-		LocationID:      locationID,
-		EncodingVersion: volIDVersion,
-		ClusterID:       clusterID,
-		ObjectUUID:      objUUID,
+		LocationID: locationID,
+		ClusterID:  clusterID,
+		ObjectUUID: objUUID,
 	}
 
 	volID, err := vi.ComposeCSIID()
@@ -344,12 +343,6 @@ func IsCorruptedMountError(err error) bool {
 	return mount.IsCorruptedMnt(err)
 }
 
-// ReadMountInfoForProc reads /proc/<PID>/mountpoint and marshals it into
-// MountInfo structs.
-func ReadMountInfoForProc(proc string) ([]mount.MountInfo, error) {
-	return mount.ParseMountInfo(fmt.Sprintf("/proc/%s/mountinfo", proc))
-}
-
 // Mount mounts the source to target path.
 func Mount(mounter mount.Interface, source, target, fstype string, options []string) error {
 	return mounter.MountSensitiveWithoutSystemd(source, target, fstype, options, nil)
@@ -369,22 +362,12 @@ func MountOptionsAdd(options string, add ...string) string {
 	}
 
 	for _, opt := range add {
-		if opt != "" && !contains(newOpts, opt) {
+		if opt != "" && !slices.Contains(newOpts, opt) {
 			newOpts = append(newOpts, opt)
 		}
 	}
 
 	return strings.Join(newOpts, ",")
-}
-
-func contains(s []string, key string) bool {
-	for _, v := range s {
-		if v == key {
-			return true
-		}
-	}
-
-	return false
 }
 
 // CallStack returns the stack of the calls in the current goroutine. Useful
@@ -395,4 +378,24 @@ func CallStack() string {
 	_ = runtime.Stack(stack, false)
 
 	return string(stack)
+}
+
+// GetVolumeContext filters out parameters that are not required in volume context.
+func GetVolumeContext(parameters map[string]string) map[string]string {
+	volumeContext := map[string]string{}
+
+	// parameters that are not required in the volume context
+	notRequiredParams := []string{
+		topologyPoolsParam,
+	}
+	for k, v := range parameters {
+		if !slices.Contains(notRequiredParams, k) {
+			volumeContext[k] = v
+		}
+	}
+
+	// remove kubernetes csi prefixed parameters.
+	volumeContext = k8s.RemoveCSIPrefixedParameters(volumeContext)
+
+	return volumeContext
 }

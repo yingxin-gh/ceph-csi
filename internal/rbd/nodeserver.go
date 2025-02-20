@@ -26,6 +26,7 @@ import (
 
 	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
 	"github.com/ceph/ceph-csi/internal/util"
+	"github.com/ceph/ceph-csi/internal/util/file"
 	"github.com/ceph/ceph-csi/internal/util/fscrypt"
 	"github.com/ceph/ceph-csi/internal/util/log"
 
@@ -45,8 +46,11 @@ type NodeServer struct {
 	// A map storing all volumes with ongoing operations so that additional operations
 	// for that same volume (as defined by VolumeID) return an Aborted error
 	VolumeLocks *util.VolumeLocks
-	// readAffinityMapOptions contains map options to enable read affinity.
-	readAffinityMapOptions string
+
+	// ext4HasPrezeroedSupport indicates whether the ext4 filesystem has support for pre-zeroed blocks.
+	ext4HasPrezeroedSupport featureFlag
+	// xfsHasReflinkSupport indicates whether the xfs filesystem has support for reflink.
+	xfsHasReflinkSupport featureFlag
 }
 
 // stageTransaction struct represents the state a transaction was when it either completed
@@ -63,11 +67,16 @@ type stageTransaction struct {
 	devicePath string
 }
 
+// featureFlag represents a type for defining feature flags within the RBD node server.
+type featureFlag int
+
 const (
-	// values for xfsHasReflink.
-	xfsReflinkUnset int = iota
-	xfsReflinkNoSupport
-	xfsReflinkSupport
+	// featureFlagUnset represents the default value for a feature flag.
+	featureFlagUnset featureFlag = iota
+	// featureFlagNoSupport represents the value for a feature flag when the feature is not supported.
+	featureFlagNoSupport
+	// featureFlagSupport represents the value for a feature flag when the feature is supported.
+	featureFlagSupport
 
 	staticVol        = "staticVolume"
 	volHealerCtx     = "volumeHealerContext"
@@ -78,7 +87,7 @@ var (
 	kernelRelease = ""
 	// deepFlattenSupport holds the list of kernel which support mapping rbd
 	// image with deep-flatten image feature
-	// nolint:gomnd // numbers specify Kernel versions.
+	//nolint:mnd // numbers specify Kernel versions.
 	deepFlattenSupport = []util.KernelVersion{
 		{
 			Version:      5,
@@ -98,15 +107,6 @@ var (
 		}, // RHEL 8.2
 	}
 
-	// xfsHasReflink is set by xfsSupportsReflink(), use the function when
-	// checking the support for reflink.
-	xfsHasReflink = xfsReflinkUnset
-
-	mkfsDefaultArgs = map[string][]string{
-		"ext4": {"-m0", "-Enodiscard,lazy_itable_init=1,lazy_journal_init=1"},
-		"xfs":  {"-K"},
-	}
-
 	mountDefaultOpts = map[string][]string{
 		"xfs": {"nouuid"},
 	}
@@ -114,7 +114,8 @@ var (
 
 // parseBoolOption checks if parameters contain option and parse it. If it is
 // empty or not set return default.
-// nolint:unparam // currently defValue is always false, this can change in the future
+//
+//nolint:unparam // currently defValue is always false, this can change in the future
 func parseBoolOption(ctx context.Context, parameters map[string]string, optionName string, defValue bool) bool {
 	boolVal := defValue
 
@@ -164,7 +165,7 @@ func (ns *NodeServer) populateRbdVol(
 	isBlock := req.GetVolumeCapability().GetBlock() != nil
 	disableInUseChecks := false
 	// MULTI_NODE_MULTI_WRITER is supported by default for Block access type volumes
-	if req.VolumeCapability.AccessMode.Mode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+	if req.GetVolumeCapability().GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
 		if !isBlock {
 			log.WarningLog(
 				ctx,
@@ -199,7 +200,7 @@ func (ns *NodeServer) populateRbdVol(
 	} else {
 		rv, err = GenVolFromVolID(ctx, volID, cr, req.GetSecrets())
 		if err != nil {
-			rv.Destroy()
+			rv.Destroy(ctx)
 			log.ErrorLog(ctx, "error generating volume %s: %v", volID, err)
 
 			return nil, status.Errorf(codes.Internal, "error generating volume %s: %v", volID, err)
@@ -222,7 +223,7 @@ func (ns *NodeServer) populateRbdVol(
 	// in case of any error call Destroy for cleanup.
 	defer func() {
 		if err != nil {
-			rv.Destroy()
+			rv.Destroy(ctx)
 		}
 	}()
 	// get the image details from the ceph cluster.
@@ -257,11 +258,10 @@ func (ns *NodeServer) populateRbdVol(
 		rv.Mounter = rbdNbdMounter
 	}
 
-	err = getMapOptions(req, rv)
+	err = ns.getMapOptions(req, rv)
 	if err != nil {
 		return nil, err
 	}
-	ns.appendReadAffinityMapOptions(rv)
 
 	rv.VolID = volID
 
@@ -279,14 +279,14 @@ func (ns *NodeServer) populateRbdVol(
 
 // appendReadAffinityMapOptions appends readAffinityMapOptions to mapOptions
 // if mounter is rbdDefaultMounter and readAffinityMapOptions is not empty.
-func (ns NodeServer) appendReadAffinityMapOptions(rv *rbdVolume) {
+func (rv *rbdVolume) appendReadAffinityMapOptions(readAffinityMapOptions string) {
 	switch {
-	case ns.readAffinityMapOptions == "" || rv.Mounter != rbdDefaultMounter:
+	case readAffinityMapOptions == "" || rv.Mounter != rbdDefaultMounter:
 		return
 	case rv.MapOptions != "":
-		rv.MapOptions += "," + ns.readAffinityMapOptions
+		rv.MapOptions += "," + readAffinityMapOptions
 	default:
-		rv.MapOptions = ns.readAffinityMapOptions
+		rv.MapOptions = readAffinityMapOptions
 	}
 }
 
@@ -347,7 +347,7 @@ func (ns *NodeServer) NodeStageVolume(
 	if err != nil {
 		return nil, err
 	}
-	defer rv.Destroy()
+	defer rv.Destroy(ctx)
 
 	rv.NetNamespaceFilePath, err = util.GetRBDNetNamespaceFilePath(util.CsiConfigFile, rv.ClusterID)
 	if err != nil {
@@ -402,7 +402,7 @@ func (ns *NodeServer) stageTransaction(
 	var err error
 
 	// Allow image to be mounted on multiple nodes if it is ROX
-	if req.VolumeCapability.AccessMode.Mode == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
+	if req.GetVolumeCapability().GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
 		log.ExtendedLog(ctx, "setting disableInUseChecks on rbd volume to: %v", req.GetVolumeId)
 		volOptions.DisableInUseChecks = true
 		volOptions.readOnly = true
@@ -510,6 +510,14 @@ func resizeNodeStagePath(ctx context.Context,
 		devicePath, err = resizeEncryptedDevice(ctx, volID, stagingTargetPath, devicePath)
 		if err != nil {
 			return status.Error(codes.Internal, err.Error())
+		}
+
+		// If this is a AccessType=Block volume, do not attempt
+		// filesystem resize. The application is in charge of the data
+		// on top of the raw block-device, we can not assume there is a
+		// filesystem at all.
+		if isBlock {
+			return nil
 		}
 	}
 	// check stagingPath needs resize.
@@ -703,8 +711,12 @@ func (ns *NodeServer) NodePublishVolume(
 	volID := req.GetVolumeId()
 	stagingPath += "/" + volID
 
-	// Considering kubelet make sure the stage and publish operations
-	// are serialized, we dont need any extra locking in nodePublish
+	if acquired := ns.VolumeLocks.TryAcquire(targetPath); !acquired {
+		log.ErrorLog(ctx, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+
+		return nil, status.Errorf(codes.Aborted, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+	}
+	defer ns.VolumeLocks.Release(targetPath)
 
 	// Check if that target path exists properly
 	notMnt, err := ns.createTargetMountPath(ctx, targetPath, isBlock)
@@ -771,8 +783,9 @@ func (ns *NodeServer) mountVolumeToStagePath(
 	isBlock := req.GetVolumeCapability().GetBlock() != nil
 	rOnly := "ro"
 
-	if req.VolumeCapability.AccessMode.Mode == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY ||
-		req.VolumeCapability.AccessMode.Mode == csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY {
+	mode := req.GetVolumeCapability().GetAccessMode().GetMode()
+	if mode == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY ||
+		mode == csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY {
 		if !csicommon.MountOptionContains(opt, rOnly) {
 			opt = append(opt, rOnly)
 		}
@@ -782,7 +795,7 @@ func (ns *NodeServer) mountVolumeToStagePath(
 	}
 
 	if existingFormat == "" && !staticVol && !readOnly && !isBlock {
-		args := mkfsDefaultArgs[fsType]
+		args := ns.getMkfsArgs(fsType)
 
 		// if the VolumeContext contains "mkfsOptions", use those as args instead
 		volumeCtx := req.GetVolumeContext()
@@ -907,8 +920,14 @@ func (ns *NodeServer) NodeUnpublishVolume(
 	}
 
 	targetPath := req.GetTargetPath()
-	// considering kubelet make sure node operations like unpublish/unstage...etc can not be called
-	// at same time, an explicit locking at time of nodeunpublish is not required.
+
+	if acquired := ns.VolumeLocks.TryAcquire(targetPath); !acquired {
+		log.ErrorLog(ctx, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+
+		return nil, status.Errorf(codes.Aborted, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+	}
+	defer ns.VolumeLocks.Release(targetPath)
+
 	isMnt, err := ns.Mounter.IsMountPoint(targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -921,7 +940,7 @@ func (ns *NodeServer) NodeUnpublishVolume(
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 	if !isMnt {
-		if err = os.RemoveAll(targetPath); err != nil {
+		if err = os.Remove(targetPath); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
@@ -932,7 +951,7 @@ func (ns *NodeServer) NodeUnpublishVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if err = os.RemoveAll(targetPath); err != nil {
+	if err = os.Remove(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -1022,7 +1041,7 @@ func (ns *NodeServer) NodeUnstageVolume(
 		}
 
 		// It was not mounted and image metadata is also missing, we are done as the last step in
-		// in the staging transaction is complete
+		// the staging transaction is complete
 		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
 
@@ -1195,6 +1214,13 @@ func (ns *NodeServer) NodeGetCapabilities(
 			{
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_VOLUME_CONDITION,
+					},
+				},
+			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
 						Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 					},
 				},
@@ -1225,23 +1251,6 @@ func (ns *NodeServer) processEncryptedDevice(
 	}
 
 	switch {
-	case encrypted == rbdImageRequiresEncryption:
-		// If we get here, it means the image was created with a
-		// ceph-csi version that creates a passphrase for the encrypted
-		// device in NodeStage. New versions moved that to
-		// CreateVolume.
-		// Use the same setupEncryption() as CreateVolume does, and
-		// continue with the common process to crypt-format the device.
-		err = volOptions.setupBlockEncryption(ctx)
-		if err != nil {
-			log.ErrorLog(ctx, "failed to setup encryption for rbd"+
-				"image %s: %v", imageSpec, err)
-
-			return "", err
-		}
-
-		// make sure we continue with the encrypting of the device
-		fallthrough
 	case encrypted == rbdImageEncryptionPrepared:
 		diskMounter := &mount.SafeFormatAndMount{Interface: ns.Mounter, Exec: utilexec.New()}
 		// TODO: update this when adding support for static (pre-provisioned) PVs
@@ -1285,8 +1294,8 @@ func (ns *NodeServer) processEncryptedDevice(
 // argument. In case it is supported, return true.
 func (ns *NodeServer) xfsSupportsReflink() bool {
 	// return cached value, if set
-	if xfsHasReflink != xfsReflinkUnset {
-		return xfsHasReflink == xfsReflinkSupport
+	if ns.xfsHasReflinkSupport != featureFlagUnset {
+		return ns.xfsHasReflinkSupport == featureFlagSupport
 	}
 
 	// run mkfs.xfs in the same namespace as formatting would be done in
@@ -1296,15 +1305,63 @@ func (ns *NodeServer) xfsSupportsReflink() bool {
 	if err != nil {
 		// mkfs.xfs should fail with an error message (and help text)
 		if strings.Contains(string(out), "reflink=0|1") {
-			xfsHasReflink = xfsReflinkSupport
+			ns.xfsHasReflinkSupport = featureFlagSupport
 
 			return true
 		}
 	}
 
-	xfsHasReflink = xfsReflinkNoSupport
+	ns.xfsHasReflinkSupport = featureFlagNoSupport
 
 	return false
+}
+
+// ext4SupportsPrezeroed checks if the ext4 filesystem supports the
+// "assume_storage_prezeroed" option. It does this by creating a temporary
+// image file, attempting to format it with the ext4 filesystem using the
+// "assume_storage_prezeroed" option, and checking the output for errors.
+func (ns *NodeServer) ext4SupportsPrezeroed() bool {
+	if ns.ext4HasPrezeroedSupport != featureFlagUnset {
+		return ns.ext4HasPrezeroedSupport == featureFlagSupport
+	}
+
+	ctx := context.TODO()
+	tempImgFile, err := os.CreateTemp(os.TempDir(), "prezeroed.img")
+	if err != nil {
+		log.WarningLog(ctx, "failed to create temporary image file: %v", err)
+
+		return false
+	}
+	defer os.Remove(tempImgFile.Name())
+
+	if err = file.CreateSparseFile(tempImgFile, 1); err != nil {
+		log.WarningLog(ctx, "failed to create sparse file: %v", err)
+
+		return false
+	}
+
+	diskMounter := &mount.SafeFormatAndMount{Interface: ns.Mounter, Exec: utilexec.New()}
+
+	// `-n` Causes mke2fs to not actually create a file system
+	// but display what it would do if it were to create a file system.
+	out, err := diskMounter.Exec.Command(
+		"mkfs.ext4",
+		"-n",
+		"-Eassume_storage_prezeroed=1",
+		tempImgFile.Name(),
+	).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "Bad option(s) specified") {
+			ns.ext4HasPrezeroedSupport = featureFlagNoSupport
+		}
+
+		// if the error is not due to the missing option, we can't be sure
+		// if the option is supported or not, return false optimistically
+		return false
+	}
+	ns.ext4HasPrezeroedSupport = featureFlagSupport
+
+	return true
 }
 
 // NodeGetVolumeStats returns volume stats.
@@ -1368,6 +1425,10 @@ func blockNodeGetVolumeStats(ctx context.Context, targetPath string) (*csi.NodeG
 				Unit:  csi.VolumeUsage_BYTES,
 			},
 		},
+		VolumeCondition: &csi.VolumeCondition{
+			Abnormal: false,
+			Message:  "volume is in a healthy condition",
+		},
 	}, nil
 }
 
@@ -1387,21 +1448,24 @@ func getDeviceSize(ctx context.Context, devicePath string) (uint64, error) {
 	return size, nil
 }
 
-func (ns *NodeServer) SetReadAffinityMapOptions(crushLocationMap map[string]string) {
-	if len(crushLocationMap) == 0 {
-		return
-	}
-
-	var b strings.Builder
-	b.WriteString("read_from_replica=localize,crush_location=")
-	first := true
-	for key, val := range crushLocationMap {
-		if first {
-			b.WriteString(fmt.Sprintf("%s:%s", key, val))
-			first = false
-		} else {
-			b.WriteString(fmt.Sprintf("|%s:%s", key, val))
+// getMkfsArgs returns the appropriate mkfs arguments for the given filesystem type.
+// Supported filesystem types are "ext4" and "xfs". For "ext4", it checks if the
+// ext4 filesystem supports pre-zeroed storage and returns the corresponding arguments.
+// For "xfs", it returns the arguments to disable discard. If an unknown filesystem
+// type is provided, a warning is logged and empty options are returned.
+func (ns *NodeServer) getMkfsArgs(fsType string) []string {
+	switch fsType {
+	case "ext4":
+		if ns.ext4SupportsPrezeroed() {
+			return []string{"-m0", "-Enodiscard,assume_storage_prezeroed=1"}
 		}
+
+		return []string{"-m0", "-Enodiscard,lazy_itable_init=1,lazy_journal_init=1"}
+	case "xfs":
+		return []string{"-K"}
+	default:
+		log.WarningLogMsg("unknown fsType: %q, using default mkfs options", fsType)
+
+		return []string{}
 	}
-	ns.readAffinityMapOptions = b.String()
 }

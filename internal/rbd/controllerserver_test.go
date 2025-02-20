@@ -16,7 +16,10 @@ limitations under the License.
 
 package rbd
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestValidateStriping(t *testing.T) {
 	t.Parallel()
@@ -77,11 +80,88 @@ func TestValidateStriping(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if err := validateStriping(ts.parameters); (err != nil) != ts.wantErr {
-				t.Errorf("validateStriping() error = %v, wantErr %v", err, ts.wantErr)
+			if err := validateStriping(tt.parameters); (err != nil) != tt.wantErr {
+				t.Errorf("validateStriping() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestToCSIVolume(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		rv      *rbdVolume
+		wantErr bool
+	}{
+		{
+			name: "all attributes set",
+			rv: &rbdVolume{
+				rbdImage: rbdImage{
+					VolID:        "0001-unique-volume-id",
+					Pool:         "ecpool",
+					JournalPool:  "replicapool",
+					RbdImageName: "csi-vol-01234-5678-90abc",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing volume-id",
+			rv: &rbdVolume{
+				rbdImage: rbdImage{
+					VolID:        "",
+					Pool:         "ecpool",
+					JournalPool:  "replicapool",
+					RbdImageName: "csi-vol-01234-5678-90abc",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing pool",
+			rv: &rbdVolume{
+				rbdImage: rbdImage{
+					VolID:        "0001-unique-volume-id",
+					Pool:         "",
+					JournalPool:  "replicapool",
+					RbdImageName: "csi-vol-01234-5678-90abc",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing journal-pool",
+			rv: &rbdVolume{
+				rbdImage: rbdImage{
+					VolID:        "0001-unique-volume-id",
+					Pool:         "ecpool",
+					JournalPool:  "",
+					RbdImageName: "csi-vol-01234-5678-90abc",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing image-name",
+			rv: &rbdVolume{
+				rbdImage: rbdImage{
+					VolID:        "0001-unique-volume-id",
+					Pool:         "ecpool",
+					JournalPool:  "",
+					RbdImageName: "",
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := tt.rv.ToCSI(context.TODO()); (err != nil) != tt.wantErr {
+				t.Errorf("ToCSI() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

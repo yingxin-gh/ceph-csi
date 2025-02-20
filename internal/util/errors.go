@@ -18,10 +18,13 @@ package util
 
 import (
 	"errors"
-	"fmt"
+
+	"github.com/ceph/go-ceph/rados"
 )
 
 var (
+	// ErrImageNotFound is returned when image name is not found in the cluster on the given pool and/or namespace.
+	ErrImageNotFound = errors.New("image not found")
 	// ErrKeyNotFound is returned when requested key in omap is not found.
 	ErrKeyNotFound = errors.New("key not found")
 	// ErrObjectExists is returned when named omap is already present in rados.
@@ -39,27 +42,29 @@ var (
 	ErrMissingConfigForMonitor = errors.New("missing configuration of cluster ID for monitor")
 )
 
-type pairError struct {
-	first  error
-	second error
-}
-
-func (e pairError) Error() string {
-	return fmt.Sprintf("%v: %v", e.first, e.second)
-}
-
-// Is checks if target error is wrapped in the first error.
-func (e pairError) Is(target error) bool {
-	return errors.Is(e.first, target)
-}
-
-// Unwrap returns the second error.
-func (e pairError) Unwrap() error {
-	return e.second
-}
-
-// JoinErrors combines two errors. Of the returned error, Is() follows the first
-// branch, Unwrap() follows the second branch.
-func JoinErrors(e1, e2 error) error {
-	return pairError{e1, e2}
+// ShouldRetryVolumeGeneration determines whether the process of finding or generating
+// volumes should continue based on the type of error encountered.
+//
+// It checks if the given error matches any of the following known errors:
+//   - util.ErrKeyNotFound: The key required to locate the volume is missing in Rados omap.
+//   - util.ErrPoolNotFound: The rbd pool where the volume/omap is expected doesn't exist.
+//   - ErrImageNotFound: The image doesn't exist in the rbd pool.
+//   - rados.ErrPermissionDenied: Permissions to access the pool is denied.
+//
+// If any of these errors are encountered, the function returns `true`, indicating
+// that the volume search should continue because of known error. Otherwise, it
+// returns `false`, meaning the search should stop.
+//
+// This helper function is used in scenarios where multiple attempts may be made
+// to retrieve or generate volume information, and we want to gracefully handle
+// specific failure cases while retrying for others.
+func ShouldRetryVolumeGeneration(err error) bool {
+	if err == nil {
+		return false // No error, do not retry
+	}
+	// Continue searching for specific known errors
+	return (errors.Is(err, ErrKeyNotFound) ||
+		errors.Is(err, ErrPoolNotFound) ||
+		errors.Is(err, ErrImageNotFound) ||
+		errors.Is(err, rados.ErrPermissionDenied))
 }

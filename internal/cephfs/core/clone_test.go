@@ -17,25 +17,24 @@ limitations under the License.
 package core
 
 import (
-	"errors"
 	"testing"
 
 	cerrors "github.com/ceph/ceph-csi/internal/cephfs/errors"
 
 	fsa "github.com/ceph/go-ceph/cephfs/admin"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCloneStateToError(t *testing.T) {
 	t.Parallel()
 	errorState := make(map[cephFSCloneState]error)
-	errorState[cephFSCloneState{fsa.CloneComplete, "", ""}] = nil
-	errorState[CephFSCloneError] = cerrors.ErrInvalidClone
-	errorState[cephFSCloneState{fsa.CloneInProgress, "", ""}] = cerrors.ErrCloneInProgress
-	errorState[cephFSCloneState{fsa.ClonePending, "", ""}] = cerrors.ErrClonePending
-	errorState[cephFSCloneState{fsa.CloneFailed, "", ""}] = cerrors.ErrCloneFailed
+	errorState[cephFSCloneState{fsa.CloneComplete, fsa.CloneProgressReport{}, "", ""}] = nil
+	errorState[*CephFSCloneError] = cerrors.ErrInvalidClone
+	errorState[cephFSCloneState{fsa.CloneInProgress, fsa.CloneProgressReport{}, "", ""}] = cerrors.ErrCloneInProgress
+	errorState[cephFSCloneState{fsa.ClonePending, fsa.CloneProgressReport{}, "", ""}] = cerrors.ErrClonePending
+	errorState[cephFSCloneState{fsa.CloneFailed, fsa.CloneProgressReport{}, "", ""}] = cerrors.ErrCloneFailed
 
 	for state, err := range errorState {
-		assert.True(t, errors.Is(state.ToError(), err))
+		require.ErrorIs(t, state.ToError(), err)
 	}
 }

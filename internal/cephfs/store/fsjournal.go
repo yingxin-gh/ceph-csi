@@ -23,7 +23,6 @@ import (
 
 	"github.com/ceph/ceph-csi/internal/cephfs/core"
 	cerrors "github.com/ceph/ceph-csi/internal/cephfs/errors"
-	fsutil "github.com/ceph/ceph-csi/internal/cephfs/util"
 	"github.com/ceph/ceph-csi/internal/journal"
 	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
@@ -40,6 +39,10 @@ var (
 	// SnapJournal is used to maintain RADOS based journals for CO generated.
 	// SnapshotName to backing CephFS subvolumes.
 	SnapJournal *journal.Config
+
+	// VolumeGroupJournal is used to maintain RADOS based journals for CO
+	// generate request name to CephFS snapshot group attributes.
+	VolumeGroupJournal journal.VolumeGroupJournalConfig
 )
 
 // VolumeIdentifier structure contains an association between the CSI VolumeID to its subvolume
@@ -71,7 +74,7 @@ because, the order of omap creation and deletion are inverse of each other, and 
 request name lock, and hence any stale omaps are leftovers from incomplete transactions and are
 hence safe to garbage collect.
 */
-// nolint:gocognit,gocyclo,nestif,cyclop // TODO: reduce complexity
+//nolint:gocognit,gocyclo,nestif,cyclop // TODO: reduce complexity
 func CheckVolExists(ctx context.Context,
 	volOptions,
 	parentVolOpt *VolumeOptions,
@@ -83,8 +86,7 @@ func CheckVolExists(ctx context.Context,
 	setMetadata bool,
 ) (*VolumeIdentifier, error) {
 	var vid VolumeIdentifier
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := VolJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := VolJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +128,17 @@ func CheckVolExists(ctx context.Context,
 		}
 		err = cloneState.ToError()
 		if errors.Is(err, cerrors.ErrCloneInProgress) {
+			progressReport := cloneState.GetProgressReport()
+			// append progress report only if the progress report parameters are present.
+			if progressReport.PercentageCloned != "" {
+				err = fmt.Errorf("%w. progress report: percentage cloned=%s, amount cloned=%s, files cloned=%s",
+					err,
+					progressReport.PercentageCloned,
+					progressReport.AmountCloned,
+					progressReport.FilesCloned)
+				log.ErrorLog(ctx, err.Error())
+			}
+
 			return nil, err
 		}
 		if errors.Is(err, cerrors.ErrClonePending) {
@@ -192,7 +205,7 @@ func CheckVolExists(ctx context.Context,
 
 	// found a volume already available, process and return it!
 	vid.VolumeID, err = util.GenerateVolID(ctx, volOptions.Monitors, cr, volOptions.FscID,
-		"", volOptions.ClusterID, imageUUID, fsutil.VolIDVersion)
+		"", volOptions.ClusterID, imageUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +237,7 @@ func UndoVolReservation(
 	}
 	defer cr.DeleteCredentials()
 
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := VolJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := VolJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return err
 	}
@@ -279,8 +291,7 @@ func ReserveVol(ctx context.Context, volOptions *VolumeOptions, secret map[strin
 		return nil, err
 	}
 
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := VolJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := VolJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +310,7 @@ func ReserveVol(ctx context.Context, volOptions *VolumeOptions, secret map[strin
 	volOptions.VolID = vid.FsSubvolName
 	// generate the volume ID to return to the CO system
 	vid.VolumeID, err = util.GenerateVolID(ctx, volOptions.Monitors, cr, volOptions.FscID,
-		"", volOptions.ClusterID, imageUUID, fsutil.VolIDVersion)
+		"", volOptions.ClusterID, imageUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -325,8 +336,7 @@ func ReserveSnap(
 		err       error
 	)
 
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := SnapJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := SnapJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +355,7 @@ func ReserveSnap(
 
 	// generate the snapshot ID to return to the CO system
 	vid.SnapshotID, err = util.GenerateVolID(ctx, volOptions.Monitors, cr, volOptions.FscID,
-		"", volOptions.ClusterID, imageUUID, fsutil.VolIDVersion)
+		"", volOptions.ClusterID, imageUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -364,8 +374,7 @@ func UndoSnapReservation(
 	snapName string,
 	cr *util.Credentials,
 ) error {
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := SnapJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := SnapJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return err
 	}
@@ -398,11 +407,10 @@ func CheckSnapExists(
 	clusterName string,
 	setMetadata bool,
 	cr *util.Credentials,
-) (*SnapshotIdentifier, *core.SnapshotInfo, error) {
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := SnapJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+) (*SnapshotIdentifier, error) {
+	j, err := SnapJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer j.Destroy()
 
@@ -411,10 +419,10 @@ func CheckSnapExists(
 	snapData, err := j.CheckReservation(
 		ctx, volOptions.MetadataPool, snap.RequestName, snap.NamePrefix, volOptions.VolID, kmsID, encryptionType)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if snapData == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
 	sid := &SnapshotIdentifier{}
 	snapUUID := snapData.ImageUUID
@@ -428,10 +436,10 @@ func CheckSnapExists(
 			err = j.UndoReservation(ctx, volOptions.MetadataPool,
 				volOptions.MetadataPool, snapID, snap.RequestName)
 
-			return nil, nil, err
+			return nil, err
 		}
 
-		return nil, nil, err
+		return nil, err
 	}
 
 	defer func() {
@@ -453,12 +461,12 @@ func CheckSnapExists(
 
 	// found a snapshot already available, process and return it!
 	sid.SnapshotID, err = util.GenerateVolID(ctx, volOptions.Monitors, cr, volOptions.FscID,
-		"", volOptions.ClusterID, snapUUID, fsutil.VolIDVersion)
+		"", volOptions.ClusterID, snapUUID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	log.DebugLog(ctx, "Found existing snapshot (%s) with subvolume name (%s) for request (%s)",
 		snapData.ImageAttributes.RequestName, volOptions.VolID, sid.FsSnapshotName)
 
-	return sid, &snapInfo, nil
+	return sid, nil
 }

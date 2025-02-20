@@ -23,20 +23,15 @@ import (
 )
 
 // GetCrushLocationMap returns the crush location map, determined from
-// the crush location labels and their values from the CO system.
+// the crush location labels and their values from the node labels passed in arg.
 // Expects crushLocationLabels in arg to be in the format "[prefix/]<name>,[prefix/]<name>,...",.
 // Returns map of crush location types with its array of associated values.
-func GetCrushLocationMap(crushLocationLabels, nodeName string) (map[string]string, error) {
+func GetCrushLocationMap(crushLocationLabels string, nodeLabels map[string]string) map[string]string {
 	if crushLocationLabels == "" {
-		return nil, nil
+		return nil
 	}
 
-	nodeLabels, err := k8sGetNodeLabels(nodeName)
-	if err != nil {
-		return nil, err
-	}
-
-	return getCrushLocationMap(crushLocationLabels, nodeLabels), nil
+	return getCrushLocationMap(crushLocationLabels, nodeLabels)
 }
 
 // getCrushLocationMap returns the crush location map, determined from
@@ -53,6 +48,10 @@ func getCrushLocationMap(crushLocationLabels string, nodeLabels map[string]strin
 	// Determine values for requested labels from node labels
 	crushLocationMap := make(map[string]string, len(labelsIn))
 	for key, value := range nodeLabels {
+		// label with empty value is not considered.
+		if value == "" {
+			continue
+		}
 		if _, ok := labelsIn[key]; !ok {
 			continue
 		}
@@ -64,7 +63,7 @@ func getCrushLocationMap(crushLocationLabels string, nodeLabels map[string]strin
 			crushLocationType = "host"
 		}
 		// replace "." with "-" to satisfy ceph crush map.
-		value = strings.Replace(strings.TrimSpace(value), ".", "-", -1)
+		value = strings.ReplaceAll(strings.TrimSpace(value), ".", "-")
 		crushLocationMap[crushLocationType] = value
 	}
 

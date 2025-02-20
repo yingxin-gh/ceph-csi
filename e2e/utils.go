@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
+	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batch "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
@@ -52,8 +52,9 @@ const (
 	rbdType    = "rbd"
 	cephfsType = "cephfs"
 
-	volumesType = "volumes"
-	snapsType   = "snaps"
+	volumesType    = "volumes"
+	snapsType      = "snaps"
+	groupSnapsType = "groupsnaps"
 
 	rookToolBoxPodLabel = "app=rook-ceph-tools"
 	rbdMountOptions     = "mountOptions"
@@ -173,38 +174,53 @@ func validateOmapCount(f *framework.Framework, count int, driver, pool, mode str
 		{
 			volumeMode: volumesType,
 			driverType: cephfsType,
-			radosLsCmd: fmt.Sprintf("rados ls --pool=%s --namespace csi", pool),
-			radosLsCmdFilter: fmt.Sprintf("rados ls --pool=%s --namespace csi | grep -v default | grep -c ^csi.volume.",
-				pool),
-			radosLsKeysCmd: fmt.Sprintf("rados listomapkeys csi.volumes.default --pool=%s --namespace csi", pool),
-			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.volumes.default --pool=%s --namespace csi|wc -l",
-				pool),
+			radosLsCmd: "rados ls " + cephfsOptions(pool),
+			radosLsCmdFilter: fmt.Sprintf("rados ls %s | grep -v default | grep -v csi.volume.group. | grep -c ^csi.volume.",
+				cephfsOptions(pool)),
+			radosLsKeysCmd:       "rados listomapkeys csi.volumes.default " + cephfsOptions(pool),
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.volumes.default %s | wc -l", cephfsOptions(pool)),
 		},
 		{
-			volumeMode:           volumesType,
-			driverType:           rbdType,
-			radosLsCmd:           fmt.Sprintf("rados ls %s", rbdOptions(pool)),
-			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.volume.", rbdOptions(pool)),
-			radosLsKeysCmd:       fmt.Sprintf("rados listomapkeys csi.volumes.default %s", rbdOptions(pool)),
+			volumeMode: volumesType,
+			driverType: rbdType,
+			radosLsCmd: "rados ls " + rbdOptions(pool),
+			radosLsCmdFilter: fmt.Sprintf(
+				"rados ls %s | grep -v default | grep -v csi.volume.group. |  grep -c ^csi.volume.",
+				rbdOptions(pool)),
+			radosLsKeysCmd:       "rados listomapkeys csi.volumes.default " + rbdOptions(pool),
 			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.volumes.default %s | wc -l", rbdOptions(pool)),
 		},
 		{
-			volumeMode: snapsType,
-			driverType: cephfsType,
-			radosLsCmd: fmt.Sprintf("rados ls --pool=%s --namespace csi", pool),
-			radosLsCmdFilter: fmt.Sprintf("rados ls --pool=%s --namespace csi | grep -v default | grep -c ^csi.snap.",
-				pool),
-			radosLsKeysCmd: fmt.Sprintf("rados listomapkeys csi.snaps.default --pool=%s --namespace csi", pool),
-			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.snaps.default --pool=%s --namespace csi|wc -l",
-				pool),
+			volumeMode:           snapsType,
+			driverType:           cephfsType,
+			radosLsCmd:           "rados ls " + cephfsOptions(pool),
+			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.snap.", cephfsOptions(pool)),
+			radosLsKeysCmd:       "rados listomapkeys csi.snaps.default " + cephfsOptions(pool),
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.snaps.default %s | wc -l", cephfsOptions(pool)),
 		},
 		{
 			volumeMode:           snapsType,
 			driverType:           rbdType,
-			radosLsCmd:           fmt.Sprintf("rados ls %s", rbdOptions(pool)),
+			radosLsCmd:           "rados ls " + rbdOptions(pool),
 			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.snap.", rbdOptions(pool)),
-			radosLsKeysCmd:       fmt.Sprintf("rados listomapkeys csi.snaps.default %s", rbdOptions(pool)),
+			radosLsKeysCmd:       "rados listomapkeys csi.snaps.default " + rbdOptions(pool),
 			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.snaps.default %s | wc -l", rbdOptions(pool)),
+		},
+		{
+			volumeMode:           groupSnapsType,
+			driverType:           cephfsType,
+			radosLsCmd:           "rados ls" + cephfsOptions(pool),
+			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.volume.group.", cephfsOptions(pool)),
+			radosLsKeysCmd:       "rados listomapkeys csi.groups.default " + cephfsOptions(pool),
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.groups.default %s | wc -l", cephfsOptions(pool)),
+		},
+		{
+			volumeMode:           groupSnapsType,
+			driverType:           rbdType,
+			radosLsCmd:           "rados ls" + rbdOptions(pool),
+			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.volume.group.", rbdOptions(pool)),
+			radosLsKeysCmd:       "rados listomapkeys csi.groups.default " + rbdOptions(pool),
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.groups.default %s | wc -l", rbdOptions(pool)),
 		},
 	}
 
@@ -228,14 +244,14 @@ func validateOmapCount(f *framework.Framework, count int, driver, pool, mode str
 			if err == nil {
 				continue
 			}
-			saveErr := err
+			saveErr := fmt.Errorf("failed to validate omap count for %s: %w", cmd, err)
 			if strings.Contains(err.Error(), "expected omap object count") {
 				stdOut, stdErr, err = execCommandInToolBoxPod(f, filterLessCmds[i], rookNamespace)
 				if err == nil {
 					framework.Logf("additional debug info: rados ls command output: %s, stdErr: %s", stdOut, stdErr)
 				}
 			}
-			framework.Failf("%v", saveErr)
+			framework.Fail(saveErr.Error())
 		}
 	}
 }
@@ -248,9 +264,9 @@ func getMons(ns string, c kubernetes.Interface) ([]string, error) {
 
 	var svcList *v1.ServiceList
 	t := time.Duration(deployTimeout) * time.Minute
-	err := wait.PollImmediate(poll, t, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(context.TODO(), poll, t, true, func(ctx context.Context) (bool, error) {
 		var svcErr error
-		svcList, svcErr = c.CoreV1().Services(ns).List(context.TODO(), opt)
+		svcList, svcErr = c.CoreV1().Services(ns).List(ctx, opt)
 		if svcErr != nil {
 			if isRetryableAPIError(svcErr) {
 				return false, nil
@@ -716,7 +732,7 @@ func checkDataPersist(pvcPath, appPath string, f *framework.Framework) error {
 	if err != nil {
 		return err
 	}
-	persistData, stdErr, err := execCommandInPod(f, fmt.Sprintf("cat %s", filePath), app.Namespace, &opt)
+	persistData, stdErr, err := execCommandInPod(f, "cat "+filePath, app.Namespace, &opt)
 	if err != nil {
 		return err
 	}
@@ -793,7 +809,7 @@ func checkMountOptions(pvcPath, appPath string, f *framework.Framework, mountFla
 		LabelSelector: "app=validate-mount-opt",
 	}
 
-	cmd := fmt.Sprintf("mount |grep %s", app.Spec.Containers[0].VolumeMounts[0].MountPath)
+	cmd := "mount |grep " + app.Spec.Containers[0].VolumeMounts[0].MountPath
 	data, stdErr, err := execCommandInPod(f, cmd, app.Namespace, &opt)
 	if err != nil {
 		return err
@@ -812,6 +828,10 @@ func checkMountOptions(pvcPath, appPath string, f *framework.Framework, mountFla
 	return err
 }
 
+func disableVGSAlphaCLIArg(template string) string {
+	return strings.ReplaceAll(template, "- \"--enable-volume-group-snapshots=true\"", "")
+}
+
 func addTopologyDomainsToDSYaml(template, labels string) string {
 	return strings.ReplaceAll(template, "# - \"--domainlabels=failure-domain/region,failure-domain/zone\"",
 		"- \"--domainlabels="+labels+"\"")
@@ -823,8 +843,22 @@ func oneReplicaDeployYaml(template string) string {
 	return re.ReplaceAllString(template, `$1 1`)
 }
 
-func enableTopologyInTemplate(data string) string {
-	return strings.ReplaceAll(data, "--feature-gates=Topology=false", "--feature-gates=Topology=true")
+// replaceLogLevelInTemplate replaces the log level in the template file to 5.
+func replaceLogLevelInTemplate(template string) string {
+	// Regular expression to find --v=<number> arguments
+	re := regexp.MustCompile(`--v=\d+`)
+
+	// template can contain different log levels, replace it with --v=5
+	return re.ReplaceAllString(template, "--v=5")
+}
+
+func enableReadAffinityInTemplate(template string) string {
+	return strings.ReplaceAll(template, "# - \"--enable-read-affinity=true\"", "- \"--enable-read-affinity=true\"")
+}
+
+func addCrsuhLocationLabels(template, labels string) string {
+	return strings.ReplaceAll(template, "# - \"--crush-location-labels=topology.io/zone,topology.io/rack\"",
+		"- \"--crush-location-labels="+labels+"\"")
 }
 
 func writeDataAndCalChecksum(app *v1.Pod, opt *metav1.ListOptions, f *framework.Framework) (string, error) {
@@ -852,7 +886,7 @@ func writeDataAndCalChecksum(app *v1.Pod, opt *metav1.ListOptions, f *framework.
 	return checkSum, nil
 }
 
-// nolint:gocyclo,gocognit,nestif,cyclop // reduce complexity
+//nolint:gocyclo,gocognit,nestif,cyclop // reduce complexity
 func validatePVCClone(
 	totalCount int,
 	sourcePvcPath, sourceAppPath, clonePvcPath, clonePvcAppPath,
@@ -918,7 +952,7 @@ func validatePVCClone(
 	appClone.Namespace = f.UniqueName
 	wg.Add(totalCount)
 	// create clone and bind it to an app
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			label := make(map[string]string)
@@ -1011,7 +1045,7 @@ func validatePVCClone(
 	validateRBDImageCount(f, totalCloneCount, defaultRBDPool)
 	wg.Add(totalCount)
 	// delete clone and app
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
@@ -1067,7 +1101,7 @@ func validatePVCClone(
 	validateRBDImageCount(f, 0, defaultRBDPool)
 }
 
-// nolint:gocyclo,gocognit,nestif,cyclop // reduce complexity
+//nolint:gocyclo,gocognit,nestif,cyclop // reduce complexity
 func validatePVCSnapshot(
 	totalCount int,
 	pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath string,
@@ -1122,7 +1156,7 @@ func validatePVCSnapshot(
 
 	wg.Add(totalCount)
 	// create snapshot
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, s snapapi.VolumeSnapshot) {
 			s.Name = fmt.Sprintf("%s%d", f.UniqueName, n)
 			wgErrs[n] = createSnapshot(&s, deployTimeout)
@@ -1180,7 +1214,7 @@ func validatePVCSnapshot(
 
 	// create multiple PVC from same snapshot
 	wg.Add(totalCount)
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			label := make(map[string]string)
@@ -1217,7 +1251,7 @@ func validatePVCSnapshot(
 				checkSumClone, chErrs[n] = calculateSHA512sum(f, &a, filePath, &opt)
 				framework.Logf("checksum value for the clone is %s with pod name %s", checkSumClone, name)
 				if chErrs[n] != nil {
-					framework.Logf("failed to calculte checksum for clone: %s", chErrs[n])
+					framework.Logf("failed to calculate checksum for clone: %s", chErrs[n])
 				}
 				if checkSumClone != checkSum {
 					framework.Logf(
@@ -1258,7 +1292,7 @@ func validatePVCSnapshot(
 	validateRBDImageCount(f, totalCloneCount, defaultRBDPool)
 	wg.Add(totalCount)
 	// delete clone and app
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
@@ -1285,7 +1319,7 @@ func validatePVCSnapshot(
 	// create clones from different snapshots and bind it to an
 	// app
 	wg.Add(totalCount)
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
@@ -1325,7 +1359,7 @@ func validatePVCSnapshot(
 	validateRBDImageCount(f, totalSnapCount, defaultRBDPool)
 	wg.Add(totalCount)
 	// delete snapshot
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, s snapapi.VolumeSnapshot) {
 			s.Name = fmt.Sprintf("%s%d", f.UniqueName, n)
 			content := &snapapi.VolumeSnapshotContent{}
@@ -1379,7 +1413,7 @@ func validatePVCSnapshot(
 	validateRBDImageCount(f, totalCount, defaultRBDPool)
 	wg.Add(totalCount)
 	// delete clone and app
-	for i := 0; i < totalCount; i++ {
+	for i := range totalCount {
 		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
@@ -1529,13 +1563,14 @@ func validateController(
 	return deleteResource(rbdExamplePath + "storageclass.yaml")
 }
 
-// nolint:deadcode,unused // Unused code will be used in future.
 // k8sVersionGreaterEquals checks the ServerVersion of the Kubernetes cluster
 // and compares it to the major.minor version passed. In case the version of
 // the cluster is equal or higher to major.minor, `true` is returned, `false`
 // otherwise.
 // If fetching the ServerVersion of the Kubernetes cluster fails, the calling
 // test case is marked as `FAILED` and gets aborted.
+//
+//nolint:unused // Unused code will be used in future.
 func k8sVersionGreaterEquals(c kubernetes.Interface, major, minor int) bool {
 	v, err := c.Discovery().ServerVersion()
 	if err != nil {
@@ -1545,10 +1580,17 @@ func k8sVersionGreaterEquals(c kubernetes.Interface, major, minor int) bool {
 		// return value.
 	}
 
-	maj := fmt.Sprintf("%d", major)
-	min := fmt.Sprintf("%d", minor)
+	vMajor, err := strconv.Atoi(v.Major)
+	if err != nil {
+		framework.Failf("failed to convert Kubernetes major version %q to int: %v", v.Major, err)
+	}
 
-	return (v.Major > maj) || (v.Major == maj && v.Minor >= min)
+	vMinor, err := strconv.Atoi(v.Minor)
+	if err != nil {
+		framework.Failf("failed to convert Kubernetes minor version %q to int: %v", v.Minor, err)
+	}
+
+	return (vMajor > major) || (vMajor == major && vMinor >= minor)
 }
 
 // waitForJobCompletion polls the status of the given job and waits until the
@@ -1559,8 +1601,8 @@ func waitForJobCompletion(c kubernetes.Interface, ns, job string, timeout int) e
 
 	framework.Logf("waiting for Job %s/%s to be in state %q", ns, job, batch.JobComplete)
 
-	return wait.PollImmediate(poll, t, func() (bool, error) {
-		j, err := c.BatchV1().Jobs(ns).Get(context.TODO(), job, metav1.GetOptions{})
+	return wait.PollUntilContextTimeout(context.TODO(), poll, t, true, func(ctx context.Context) (bool, error) {
+		j, err := c.BatchV1().Jobs(ns).Get(ctx, job, metav1.GetOptions{})
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
@@ -1607,7 +1649,7 @@ func retryKubectlInput(namespace string, action kubectlAction, data string, t in
 	framework.Logf("waiting for kubectl (%s -f args %s) to finish", action, args)
 	start := time.Now()
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(_ context.Context) (bool, error) {
 		cmd := []string{}
 		if len(args) != 0 {
 			cmd = append(cmd, strings.Join(args, ""))
@@ -1646,7 +1688,7 @@ func retryKubectlFile(namespace string, action kubectlAction, filename string, t
 	framework.Logf("waiting for kubectl (%s -f %q args %s) to finish", action, filename, args)
 	start := time.Now()
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(_ context.Context) (bool, error) {
 		cmd := []string{}
 		if len(args) != 0 {
 			cmd = append(cmd, strings.Join(args, ""))
@@ -1681,14 +1723,15 @@ func retryKubectlFile(namespace string, action kubectlAction, filename string, t
 // retryKubectlArgs takes a namespace and action telling kubectl what to do
 // with the passed arguments. This function retries until no error occurred, or
 // the timeout passed.
-// nolint:unparam // retryKubectlArgs will be used with kubectlDelete arg later on.
+//
+//nolint:unparam // retryKubectlArgs will be used with kubectlDelete arg later on.
 func retryKubectlArgs(namespace string, action kubectlAction, t int, args ...string) error {
 	timeout := time.Duration(t) * time.Minute
 	args = append([]string{string(action)}, args...)
 	framework.Logf("waiting for kubectl (%s args) to finish", args)
 	start := time.Now()
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(_ context.Context) (bool, error) {
 		_, err := e2ekubectl.RunKubectl(namespace, args...)
 		if err != nil {
 			if isRetryableAPIError(err) {
@@ -1729,4 +1772,144 @@ func rwopMayFail(err error) bool {
 	}
 
 	return !rwopSupported
+}
+
+// getConfigFile returns the config file path at the preferred location if it
+// exists there. Returns the fallback location otherwise.
+func getConfigFile(filename, preferred, fallback string) string {
+	configFile := preferred + filename
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		configFile = fallback + filename
+	}
+
+	return configFile
+}
+
+type nfsExportsFSAL struct {
+	Name   string `json:"name"`
+	UserID string `json:"user_id"`
+	FSName string `json:"fs_name"`
+}
+
+type nfsExportsClients struct {
+	Addresses  []string `json:"addresses"`
+	AccessType string   `json:"access_type"`
+	Squash     string   `json:"squash"`
+}
+
+type cephNFSExport struct {
+	ExportID      int                 `json:"export_id"`
+	Path          string              `json:"path"`
+	ClusterID     string              `json:"cluster_id"`
+	Pseudo        string              `json:"pseudo"`
+	AccessType    string              `json:"access_type"`
+	Squash        string              `json:"squash"`
+	SecurityLabel bool                `json:"security_label"`
+	Protocols     []int               `json:"protocols"`
+	Transports    []string            `json:"transports"`
+	FSAL          nfsExportsFSAL      `json:"fsal"`
+	Clients       []nfsExportsClients `json:"clients"`
+	SecTypes      []string            `json:"secTypes"`
+}
+
+// Get list of exports for a cluster_id.
+func listExports(f *framework.Framework, clusterID string) (*[]cephNFSExport, error) {
+	var exportList []cephNFSExport
+
+	stdout, stdErr, err := execCommandInToolBoxPod(
+		f,
+		"ceph nfs export ls "+clusterID+" --detailed",
+		rookNamespace)
+	if err != nil {
+		return nil, err
+	}
+	if stdErr != "" {
+		return nil, fmt.Errorf("error listing exports in clusterID %v", stdErr)
+	}
+
+	err = json.Unmarshal([]byte(stdout), &exportList)
+	if err != nil {
+		return nil, err
+	}
+
+	return &exportList, nil
+}
+
+// Check the export for a listed ip address and confirm that the export has
+// been setup correctly.
+func checkExports(f *framework.Framework, clusterID, clientString string) bool {
+	exportList, err := listExports(f, clusterID)
+	if err != nil {
+		framework.Logf("failed to fetch list of exports: %v", err)
+
+		return false
+	}
+
+	found := false
+	for i := range len(*exportList) {
+		export := (*exportList)[i]
+		for _, client := range export.Clients {
+			for _, address := range client.Addresses {
+				if address == clientString {
+					found = true
+
+					break
+				}
+			}
+			if found {
+				if client.AccessType != "rw" {
+					framework.Logf("Unexpected value for client AccessType: %s", client.AccessType)
+
+					return false
+				}
+
+				break
+			}
+		}
+		if found {
+			if export.AccessType != "none" {
+				framework.Logf("Unexpected value for default AccessType: %s", export.AccessType)
+
+				return false
+			}
+
+			break
+		}
+	}
+
+	if !found {
+		framework.Logf("Could not find the configured clients in the list of exports")
+
+		return false
+	}
+
+	return true
+}
+
+// createSubvolumegroup creates a subvolumegroup.
+func createSubvolumegroup(f *framework.Framework, fileSystemName, subvolumegroup string) error {
+	cmd := fmt.Sprintf("ceph fs subvolumegroup create %s %s", fileSystemName, subvolumegroup)
+	_, stdErr, err := execCommandInToolBoxPod(f, cmd, rookNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to exec command in toolbox: %w", err)
+	}
+	if stdErr != "" {
+		return fmt.Errorf("failed to create subvolumegroup %s : %v", subvolumegroup, stdErr)
+	}
+
+	return nil
+}
+
+// deleteSubvolumegroup creates a subvolumegroup.
+func deleteSubvolumegroup(f *framework.Framework, fileSystemName, subvolumegroup string) error {
+	cmd := fmt.Sprintf("ceph fs subvolumegroup rm %s %s", fileSystemName, subvolumegroup)
+	_, stdErr, err := execCommandInToolBoxPod(f, cmd, rookNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to exec command in toolbox: %w", err)
+	}
+	if stdErr != "" {
+		return fmt.Errorf("failed to remove subvolumegroup %s : %v", subvolumegroup, stdErr)
+	}
+
+	return nil
 }

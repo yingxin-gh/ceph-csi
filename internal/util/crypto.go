@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/ceph/ceph-csi/internal/kms"
+	"github.com/ceph/ceph-csi/internal/util/cryptsetup"
 	"github.com/ceph/ceph-csi/internal/util/log"
 )
 
@@ -49,6 +50,8 @@ var (
 	// DEKStore interface.
 	ErrDEKStoreNeeded = errors.New("DEKStore required, use " +
 		"VolumeEncryption.SetDEKStore()")
+
+	luks = cryptsetup.NewLUKSWrapper(context.Background())
 )
 
 type VolumeEncryption struct {
@@ -111,7 +114,7 @@ func ParseEncryptionType(typeStr string) EncryptionType {
 	}
 }
 
-func EncryptionTypeString(encType EncryptionType) string {
+func (encType EncryptionType) String() string {
 	switch encType {
 	case EncryptionTypeBlock:
 		return encryptionTypeBlockString
@@ -189,12 +192,12 @@ func (ve *VolumeEncryption) Destroy() {
 
 // RemoveDEK deletes the DEK for a particular volumeID from the DEKStore linked
 // with this VolumeEncryption instance.
-func (ve *VolumeEncryption) RemoveDEK(volumeID string) error {
+func (ve *VolumeEncryption) RemoveDEK(ctx context.Context, volumeID string) error {
 	if ve.dekStore == nil {
 		return ErrDEKStoreNotFound
 	}
 
-	return ve.dekStore.RemoveDEK(volumeID)
+	return ve.dekStore.RemoveDEK(ctx, volumeID)
 }
 
 func (ve *VolumeEncryption) GetID() string {
@@ -203,13 +206,13 @@ func (ve *VolumeEncryption) GetID() string {
 
 // StoreCryptoPassphrase takes an unencrypted passphrase, encrypts it and saves
 // it in the DEKStore.
-func (ve *VolumeEncryption) StoreCryptoPassphrase(volumeID, passphrase string) error {
-	encryptedPassphrase, err := ve.KMS.EncryptDEK(volumeID, passphrase)
+func (ve *VolumeEncryption) StoreCryptoPassphrase(ctx context.Context, volumeID, passphrase string) error {
+	encryptedPassphrase, err := ve.KMS.EncryptDEK(ctx, volumeID, passphrase)
 	if err != nil {
 		return fmt.Errorf("failed encrypt the passphrase for %s: %w", volumeID, err)
 	}
 
-	err = ve.dekStore.StoreDEK(volumeID, encryptedPassphrase)
+	err = ve.dekStore.StoreDEK(ctx, volumeID, encryptedPassphrase)
 	if err != nil {
 		return fmt.Errorf("failed to save the passphrase for %s: %w", volumeID, err)
 	}
@@ -218,23 +221,28 @@ func (ve *VolumeEncryption) StoreCryptoPassphrase(volumeID, passphrase string) e
 }
 
 // StoreNewCryptoPassphrase generates a new passphrase and saves it in the KMS.
-func (ve *VolumeEncryption) StoreNewCryptoPassphrase(volumeID string, length int) error {
+func (ve *VolumeEncryption) StoreNewCryptoPassphrase(ctx context.Context, volumeID string, length int) error {
 	passphrase, err := generateNewEncryptionPassphrase(length)
 	if err != nil {
 		return fmt.Errorf("failed to generate passphrase for %s: %w", volumeID, err)
 	}
 
-	return ve.StoreCryptoPassphrase(volumeID, passphrase)
+	return ve.StoreCryptoPassphrase(ctx, volumeID, passphrase)
 }
 
 // GetCryptoPassphrase Retrieves passphrase to encrypt volume.
-func (ve *VolumeEncryption) GetCryptoPassphrase(volumeID string) (string, error) {
-	passphrase, err := ve.dekStore.FetchDEK(volumeID)
+func (ve *VolumeEncryption) GetCryptoPassphrase(ctx context.Context, volumeID string) (string, error) {
+	passphrase, err := ve.dekStore.FetchDEK(ctx, volumeID)
 	if err != nil {
 		return "", err
 	}
 
-	return ve.KMS.DecryptDEK(volumeID, passphrase)
+	return ve.KMS.DecryptDEK(ctx, volumeID, passphrase)
+}
+
+// GetNewCryptoPassphrase returns a random passphrase of given length.
+func (ve *VolumeEncryption) GetNewCryptoPassphrase(length int) (string, error) {
+	return generateNewEncryptionPassphrase(length)
 }
 
 // generateNewEncryptionPassphrase generates a random passphrase for encryption.
@@ -259,7 +267,7 @@ func VolumeMapper(volumeID string) (string, string) {
 // EncryptVolume encrypts provided device with LUKS.
 func EncryptVolume(ctx context.Context, devicePath, passphrase string) error {
 	log.DebugLog(ctx, "Encrypting device %q	 with LUKS", devicePath)
-	_, stdErr, err := LuksFormat(devicePath, passphrase)
+	_, stdErr, err := luks.Format(devicePath, passphrase)
 	if err != nil || stdErr != "" {
 		log.ErrorLog(ctx, "failed to encrypt device %q with LUKS (%v): %s", devicePath, err, stdErr)
 	}
@@ -270,7 +278,7 @@ func EncryptVolume(ctx context.Context, devicePath, passphrase string) error {
 // OpenEncryptedVolume opens volume so that it can be used by the client.
 func OpenEncryptedVolume(ctx context.Context, devicePath, mapperFile, passphrase string) error {
 	log.DebugLog(ctx, "Opening device %q with LUKS on %q", devicePath, mapperFile)
-	_, stdErr, err := LuksOpen(devicePath, mapperFile, passphrase)
+	_, stdErr, err := luks.Open(devicePath, mapperFile, passphrase)
 	if err != nil || stdErr != "" {
 		log.ErrorLog(ctx, "failed to open device %q (%v): %s", devicePath, err, stdErr)
 	}
@@ -281,7 +289,7 @@ func OpenEncryptedVolume(ctx context.Context, devicePath, mapperFile, passphrase
 // ResizeEncryptedVolume resizes encrypted volume so that it can be used by the client.
 func ResizeEncryptedVolume(ctx context.Context, mapperFile string) error {
 	log.DebugLog(ctx, "Resizing LUKS device %q", mapperFile)
-	_, stdErr, err := LuksResize(mapperFile)
+	_, stdErr, err := luks.Resize(mapperFile)
 	if err != nil || stdErr != "" {
 		log.ErrorLog(ctx, "failed to resize LUKS device %q (%v): %s", mapperFile, err, stdErr)
 	}
@@ -292,7 +300,7 @@ func ResizeEncryptedVolume(ctx context.Context, mapperFile string) error {
 // CloseEncryptedVolume closes encrypted volume so it can be detached.
 func CloseEncryptedVolume(ctx context.Context, mapperFile string) error {
 	log.DebugLog(ctx, "Closing LUKS device %q", mapperFile)
-	_, stdErr, err := LuksClose(mapperFile)
+	_, stdErr, err := luks.Close(mapperFile)
 	if err != nil || stdErr != "" {
 		log.ErrorLog(ctx, "failed to close LUKS device %q (%v): %s", mapperFile, err, stdErr)
 	}
@@ -315,7 +323,7 @@ func DeviceEncryptionStatus(ctx context.Context, devicePath string) (string, str
 		return devicePath, "", nil
 	}
 	mapPath := strings.TrimPrefix(devicePath, mapperFilePathPrefix+"/")
-	stdout, stdErr, err := LuksStatus(mapPath)
+	stdout, stdErr, err := luks.Status(mapPath)
 	if err != nil || stdErr != "" {
 		log.DebugLog(ctx, "%q is not an active LUKS device (%v): %s", devicePath, err, stdErr)
 

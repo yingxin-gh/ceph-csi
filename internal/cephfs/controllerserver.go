@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"syscall"
 
 	"github.com/ceph/ceph-csi/internal/cephfs/core"
 	cerrors "github.com/ceph/ceph-csi/internal/cephfs/errors"
@@ -55,6 +56,10 @@ type ControllerServer struct {
 	// A map storing all volumes/snapshots with ongoing operations.
 	OperationLocks *util.OperationLock
 
+	// A map storing all volumes with ongoing operations so that additional operations
+	// for that same volume (as defined by volumegroup ID/volumegroup name) return an Aborted error
+	VolumeGroupLocks *util.VolumeLocks
+
 	// Cluster name
 	ClusterName string
 
@@ -76,7 +81,7 @@ func (cs *ControllerServer) createBackingVolume(
 		&volOptions.SubVolume, volOptions.ClusterID, cs.ClusterName, cs.SetMetadata)
 
 	if sID != nil {
-		err = parentVolOpt.CopyEncryptionConfig(volOptions, sID.SnapshotID, vID.VolumeID)
+		err = parentVolOpt.CopyEncryptionConfig(ctx, volOptions, sID.SnapshotID, vID.VolumeID)
 		if err != nil {
 			return status.Error(codes.Internal, err.Error())
 		}
@@ -85,7 +90,7 @@ func (cs *ControllerServer) createBackingVolume(
 	}
 
 	if parentVolOpt != nil {
-		err = parentVolOpt.CopyEncryptionConfig(volOptions, pvID.VolumeID, vID.VolumeID)
+		err = parentVolOpt.CopyEncryptionConfig(ctx, volOptions, pvID.VolumeID, vID.VolumeID)
 		if err != nil {
 			return status.Error(codes.Internal, err.Error())
 		}
@@ -134,6 +139,11 @@ func (cs *ControllerServer) createBackingVolumeFromSnapshotSource(
 	})
 	if err != nil {
 		log.ErrorLog(ctx, "failed to create clone from snapshot %s: %v", sID.FsSnapshotName, err)
+		// TODO: Add error handle for EAGAIN in go-ceph and replace the
+		// syscall.EAGAIN check with the go-ceph compatible error.
+		if errors.Is(err, syscall.EAGAIN) {
+			return status.Error(codes.ResourceExhausted, err.Error())
+		}
 
 		return err
 	}
@@ -156,6 +166,11 @@ func (cs *ControllerServer) createBackingVolumeFromVolumeSource(
 
 	if err := volClient.CreateCloneFromSubvolume(ctx, &parentVolOpt.SubVolume); err != nil {
 		log.ErrorLog(ctx, "failed to create clone from subvolume %s: %v", fsutil.VolumeID(pvID.FsSubvolName), err)
+		// TODO: Add error handle for EAGAIN in go-ceph and replace the
+		// syscall.EAGAIN check with the go-ceph compatible error.
+		if errors.Is(err, syscall.EAGAIN) {
+			return status.Error(codes.ResourceExhausted, err.Error())
+		}
 
 		return err
 	}
@@ -168,13 +183,13 @@ func (cs *ControllerServer) checkContentSource(
 	req *csi.CreateVolumeRequest,
 	cr *util.Credentials,
 ) (*store.VolumeOptions, *store.VolumeIdentifier, *store.SnapshotIdentifier, error) {
-	if req.VolumeContentSource == nil {
+	if req.GetVolumeContentSource() == nil {
 		return nil, nil, nil, nil
 	}
-	volumeSource := req.VolumeContentSource
-	switch volumeSource.Type.(type) {
+	volumeSource := req.GetVolumeContentSource()
+	switch volumeSource.GetType().(type) {
 	case *csi.VolumeContentSource_Snapshot:
-		snapshotID := req.VolumeContentSource.GetSnapshot().GetSnapshotId()
+		snapshotID := req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
 		volOpt, _, sid, err := store.NewSnapshotOptionsFromID(ctx, snapshotID, cr,
 			req.GetSecrets(), cs.ClusterName, cs.SetMetadata)
 		if err != nil {
@@ -188,9 +203,9 @@ func (cs *ControllerServer) checkContentSource(
 		return volOpt, nil, sid, nil
 	case *csi.VolumeContentSource_Volume:
 		// Find the volume using the provided VolumeID
-		volID := req.VolumeContentSource.GetVolume().GetVolumeId()
+		volID := req.GetVolumeContentSource().GetVolume().GetVolumeId()
 		parentVol, pvID, err := store.NewVolumeOptionsFromVolID(ctx,
-			volID, nil, req.Secrets, cs.ClusterName, cs.SetMetadata)
+			volID, nil, req.GetSecrets(), cs.ClusterName, cs.SetMetadata)
 		if err != nil {
 			if !errors.Is(err, cerrors.ErrVolumeNotFound) {
 				return nil, nil, nil, status.Error(codes.NotFound, err.Error())
@@ -214,6 +229,7 @@ func checkValidCreateVolumeRequest(
 	sID *store.SnapshotIdentifier,
 	req *csi.CreateVolumeRequest,
 ) error {
+	volCaps := req.GetVolumeCapabilities()
 	switch {
 	case pvID != nil:
 		if vol.Size < parentVol.Size {
@@ -224,12 +240,12 @@ func checkValidCreateVolumeRequest(
 				vol.Size)
 		}
 
-		if vol.BackingSnapshot {
-			return errors.New("cloning snapshot-backed volumes is currently not supported")
+		if parentVol.BackingSnapshot && store.IsVolumeCreateRO(volCaps) {
+			return errors.New("creating read-only clone from a snapshot-backed volume is not supported")
 		}
+
 	case sID != nil:
 		if vol.BackingSnapshot {
-			volCaps := req.GetVolumeCapabilities()
 			isRO := store.IsVolumeCreateRO(volCaps)
 			if !isRO {
 				return errors.New("backingSnapshot may be used only with read-only access modes")
@@ -240,8 +256,34 @@ func checkValidCreateVolumeRequest(
 	return nil
 }
 
+func buildCreateVolumeResponse(
+	req *csi.CreateVolumeRequest,
+	volOptions *store.VolumeOptions,
+	vID *store.VolumeIdentifier,
+) *csi.CreateVolumeResponse {
+	volumeContext := util.GetVolumeContext(req.GetParameters())
+	volumeContext["subvolumeName"] = vID.FsSubvolName
+	volumeContext["subvolumePath"] = volOptions.RootPath
+	volume := &csi.Volume{
+		VolumeId:      vID.VolumeID,
+		CapacityBytes: volOptions.Size,
+		ContentSource: req.GetVolumeContentSource(),
+		VolumeContext: volumeContext,
+	}
+	if volOptions.Topology != nil {
+		volume.AccessibleTopology = []*csi.Topology{
+			{
+				Segments: volOptions.Topology,
+			},
+		}
+	}
+
+	return &csi.CreateVolumeResponse{Volume: volume}
+}
+
 // CreateVolume creates a reservation and the volume in backend, if it is not already present.
-// nolint:gocognit,gocyclo,nestif,cyclop // TODO: reduce complexity
+//
+//nolint:gocognit,gocyclo,nestif,cyclop // TODO: reduce complexity
 func (cs *ControllerServer) CreateVolume(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest,
@@ -297,6 +339,23 @@ func (cs *ControllerServer) CreateVolume(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// As we are trying to create RWX volume from backing snapshot, we need to
+	// retrieve the snapshot details from the backing snapshot and create a
+	// subvolume clone from the snapshot.
+	if parentVol != nil && parentVol.BackingSnapshot && !store.IsVolumeCreateRO(req.GetVolumeCapabilities()) {
+		// unset pvID as we dont have real subvolume for the parent volumeID as its a backing snapshot
+		pvID = nil
+		parentVol, _, sID, err = store.NewSnapshotOptionsFromID(ctx, parentVol.BackingSnapshotID, cr,
+			req.GetSecrets(), cs.ClusterName, cs.SetMetadata)
+		if err != nil {
+			if errors.Is(err, cerrors.ErrSnapNotFound) {
+				return nil, status.Error(codes.NotFound, err.Error())
+			}
+
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
 	vID, err := store.CheckVolExists(ctx, volOptions, parentVol, pvID, sID, cr, cs.ClusterName, cs.SetMetadata)
 	if err != nil {
 		if cerrors.IsCloneRetryError(err) {
@@ -342,25 +401,7 @@ func (cs *ControllerServer) CreateVolume(
 			}
 		}
 
-		// remove kubernetes csi prefixed parameters.
-		volumeContext := k8s.RemoveCSIPrefixedParameters(req.GetParameters())
-		volumeContext["subvolumeName"] = vID.FsSubvolName
-		volumeContext["subvolumePath"] = volOptions.RootPath
-		volume := &csi.Volume{
-			VolumeId:      vID.VolumeID,
-			CapacityBytes: volOptions.Size,
-			ContentSource: req.GetVolumeContentSource(),
-			VolumeContext: volumeContext,
-		}
-		if volOptions.Topology != nil {
-			volume.AccessibleTopology = []*csi.Topology{
-				{
-					Segments: volOptions.Topology,
-				},
-			}
-		}
-
-		return &csi.CreateVolumeResponse{Volume: volume}, nil
+		return buildCreateVolumeResponse(req, volOptions, vID), nil
 	}
 
 	// Reservation
@@ -433,25 +474,8 @@ func (cs *ControllerServer) CreateVolume(
 
 	log.DebugLog(ctx, "cephfs: successfully created backing volume named %s for request name %s",
 		vID.FsSubvolName, requestName)
-	// remove kubernetes csi prefixed parameters.
-	volumeContext := k8s.RemoveCSIPrefixedParameters(req.GetParameters())
-	volumeContext["subvolumeName"] = vID.FsSubvolName
-	volumeContext["subvolumePath"] = volOptions.RootPath
-	volume := &csi.Volume{
-		VolumeId:      vID.VolumeID,
-		CapacityBytes: volOptions.Size,
-		ContentSource: req.GetVolumeContentSource(),
-		VolumeContext: volumeContext,
-	}
-	if volOptions.Topology != nil {
-		volume.AccessibleTopology = []*csi.Topology{
-			{
-				Segments: volOptions.Topology,
-			},
-		}
-	}
 
-	return &csi.CreateVolumeResponse{Volume: volume}, nil
+	return buildCreateVolumeResponse(req, volOptions, vID), nil
 }
 
 // DeleteVolume deletes the volume in backend and its reservation.
@@ -566,7 +590,7 @@ func (cs *ControllerServer) cleanUpBackingVolume(
 		// GetSecret enabled KMS the DEKs are stored by
 		// fscrypt on the volume that is going to be deleted anyway.
 		log.DebugLog(ctx, "going to remove DEK for integrated store %q (fscrypt)", volOptions.Encryption.GetID())
-		if err := volOptions.Encryption.RemoveDEK(volID.VolumeID); err != nil {
+		if err := volOptions.Encryption.RemoveDEK(ctx, volID.VolumeID); err != nil {
 			log.WarningLog(ctx, "failed to clean the passphrase for volume %q (file encryption): %s",
 				volOptions.VolID, err)
 		}
@@ -650,7 +674,7 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(
 	req *csi.ValidateVolumeCapabilitiesRequest,
 ) (*csi.ValidateVolumeCapabilitiesResponse, error) {
 	// Cephfs doesn't support Block volume
-	for _, capability := range req.VolumeCapabilities {
+	for _, capability := range req.GetVolumeCapabilities() {
 		if capability.GetBlock() != nil {
 			return &csi.ValidateVolumeCapabilitiesResponse{Message: ""}, nil
 		}
@@ -658,7 +682,7 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(
 
 	return &csi.ValidateVolumeCapabilitiesResponse{
 		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
-			VolumeCapabilities: req.VolumeCapabilities,
+			VolumeCapabilities: req.GetVolumeCapabilities(),
 		},
 	}, nil
 }
@@ -693,12 +717,6 @@ func (cs *ControllerServer) ControllerExpandVolume(
 	}
 	defer cs.OperationLocks.ReleaseExpandLock(volID)
 
-	cr, err := util.NewAdminCredentials(secret)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	defer cr.DeleteCredentials()
-
 	volOptions, volIdentifier, err := store.NewVolumeOptionsFromVolID(ctx, volID, nil, secret,
 		cs.ClusterName, cs.SetMetadata)
 	if err != nil {
@@ -730,7 +748,8 @@ func (cs *ControllerServer) ControllerExpandVolume(
 
 // CreateSnapshot creates the snapshot in backend and stores metadata
 // in store
-// nolint:gocognit,gocyclo,cyclop // golangci-lint did not catch this earlier, needs to get fixed late
+//
+//nolint:gocyclo,cyclop // golangci-lint did not catch this earlier, needs to get fixed late
 func (cs *ControllerServer) CreateSnapshot(
 	ctx context.Context,
 	req *csi.CreateSnapshotRequest,
@@ -810,29 +829,15 @@ func (cs *ControllerServer) CreateSnapshot(
 	}
 	defer cs.VolumeLocks.Release(sourceVolID)
 	snapName := req.GetName()
-	sid, snapInfo, err := store.CheckSnapExists(ctx, parentVolOptions, cephfsSnap, cs.ClusterName, cs.SetMetadata, cr)
+	sid, err := store.CheckSnapExists(ctx, parentVolOptions, cephfsSnap, cs.ClusterName, cs.SetMetadata, cr)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	// check are we able to retrieve the size of parent
-	// ceph fs subvolume info command got added in 14.2.10 and 15.+
-	// as we are not able to retrieve the parent size we are rejecting the
-	// request to create snapshot.
-	// TODO: For this purpose we could make use of cached clusterAdditionalInfo
-	// too.
 	volClient := core.NewSubVolume(parentVolOptions.GetConnection(), &parentVolOptions.SubVolume,
 		parentVolOptions.ClusterID, cs.ClusterName, cs.SetMetadata)
 	info, err := volClient.GetSubVolumeInfo(ctx)
 	if err != nil {
-		// Check error code value against ErrInvalidCommand to understand the cluster
-		// support it or not, It's safe to evaluate as the filtering
-		// is already done from GetSubVolumeInfo() and send out the error here.
-		if errors.Is(err, cerrors.ErrInvalidCommand) {
-			return nil, status.Error(
-				codes.FailedPrecondition,
-				"subvolume info command not supported in current ceph cluster")
-		}
 		if sid != nil {
 			errDefer := store.UndoSnapReservation(ctx, parentVolOptions, *sid, snapName, cr)
 			if errDefer != nil {
@@ -846,22 +851,11 @@ func (cs *ControllerServer) CreateSnapshot(
 
 	metadata := k8s.GetSnapshotMetadata(req.GetParameters())
 	if sid != nil {
-		// check snapshot is protected
-		protected := true
-		snapClient := core.NewSnapshot(parentVolOptions.GetConnection(), sid.FsSnapshotName,
-			parentVolOptions.ClusterID, cs.ClusterName, cs.SetMetadata, &parentVolOptions.SubVolume)
-		if !(snapInfo.Protected == core.SnapshotIsProtected) {
-			err = snapClient.ProtectSnapshot(ctx)
-			if err != nil {
-				protected = false
-				log.WarningLog(ctx, "failed to protect snapshot of snapshot: %s (%s)",
-					sid.FsSnapshotName, err)
-			}
-		}
-
 		// Update snapshot-name/snapshot-namespace/snapshotcontent-name details on
 		// subvolume snapshot as metadata in case snapshot already exist
 		if len(metadata) != 0 {
+			snapClient := core.NewSnapshot(parentVolOptions.GetConnection(), sid.FsSnapshotName,
+				parentVolOptions.ClusterID, cs.ClusterName, cs.SetMetadata, &parentVolOptions.SubVolume)
 			err = snapClient.SetAllSnapshotMetadata(metadata)
 			if err != nil {
 				return nil, status.Error(codes.Internal, err.Error())
@@ -874,7 +868,7 @@ func (cs *ControllerServer) CreateSnapshot(
 				SnapshotId:     sid.SnapshotID,
 				SourceVolumeId: req.GetSourceVolumeId(),
 				CreationTime:   sid.CreationTime,
-				ReadyToUse:     protected,
+				ReadyToUse:     true,
 			},
 		}, nil
 	}
@@ -901,7 +895,7 @@ func (cs *ControllerServer) CreateSnapshot(
 	// Use same encryption KMS than source volume and copy the passphrase. The passphrase becomes
 	// available under the snapshot id for CreateVolume to use this snap as a backing volume
 	snapVolOptions := store.VolumeOptions{}
-	err = parentVolOptions.CopyEncryptionConfig(&snapVolOptions, sourceVolID, sID.SnapshotID)
+	err = parentVolOptions.CopyEncryptionConfig(ctx, &snapVolOptions, sourceVolID, sID.SnapshotID)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -948,10 +942,6 @@ func (cs *ControllerServer) doSnapshot(
 		return snap, fmt.Errorf("failed to get snapshot info for snapshot:%s", snapID)
 	}
 	snap.CreationTime = timestamppb.New(snap.CreatedAt)
-	err = snapClient.ProtectSnapshot(ctx)
-	if err != nil {
-		log.ErrorLog(ctx, "failed to protect snapshot %s %v", snapID, err)
-	}
 
 	// Set snapshot-name/snapshot-namespace/snapshotcontent-name details
 	// on subvolume snapshot as metadata on create
@@ -974,10 +964,10 @@ func (cs *ControllerServer) validateSnapshotReq(ctx context.Context, req *csi.Cr
 	}
 
 	// Check sanity of request Snapshot Name, Source Volume Id
-	if req.Name == "" {
+	if req.GetName() == "" {
 		return status.Error(codes.NotFound, "snapshot Name cannot be empty")
 	}
-	if req.SourceVolumeId == "" {
+	if req.GetSourceVolumeId() == "" {
 		return status.Error(codes.NotFound, "source Volume ID cannot be empty")
 	}
 
@@ -986,7 +976,6 @@ func (cs *ControllerServer) validateSnapshotReq(ctx context.Context, req *csi.Cr
 
 // DeleteSnapshot deletes the snapshot in backend and removes the
 // snapshot metadata from store.
-// nolint:gocyclo,cyclop // TODO: reduce complexity
 func (cs *ControllerServer) DeleteSnapshot(
 	ctx context.Context,
 	req *csi.DeleteSnapshotRequest,
@@ -1072,20 +1061,12 @@ func (cs *ControllerServer) DeleteSnapshot(
 	if acquired := cs.SnapshotLocks.TryAcquire(sid.RequestName); !acquired {
 		log.ErrorLog(ctx, util.SnapshotOperationAlreadyExistsFmt, sid.RequestName)
 
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, sid.RequestName)
+		return nil, status.Errorf(codes.Aborted, util.SnapshotOperationAlreadyExistsFmt, sid.RequestName)
 	}
 	defer cs.SnapshotLocks.Release(sid.RequestName)
 
 	if snapInfo.HasPendingClones == "yes" {
 		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %s has pending clones", snapshotID)
-	}
-	snapClient := core.NewSnapshot(volOpt.GetConnection(), sid.FsSnapshotName,
-		volOpt.ClusterID, cs.ClusterName, cs.SetMetadata, &volOpt.SubVolume)
-	if snapInfo.Protected == core.SnapshotIsProtected {
-		err = snapClient.UnprotectSnapshot(ctx)
-		if err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
-		}
 	}
 
 	needsDelete, err := store.UnrefSelfInSnapshotBackedVolumes(ctx, volOpt, sid.SnapshotID)
@@ -1098,6 +1079,8 @@ func (cs *ControllerServer) DeleteSnapshot(
 	}
 
 	if needsDelete {
+		snapClient := core.NewSnapshot(volOpt.GetConnection(), sid.FsSnapshotName,
+			volOpt.ClusterID, cs.ClusterName, cs.SetMetadata, &volOpt.SubVolume)
 		err = deleteSnapshotAndUndoReservation(
 			ctx,
 			snapClient,

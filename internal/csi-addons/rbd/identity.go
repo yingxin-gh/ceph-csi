@@ -96,6 +96,36 @@ func (is *IdentityServer) GetCapabilities(
 						Type: identity.Capability_VolumeReplication_VOLUME_REPLICATION,
 					},
 				},
+			}, &identity.Capability{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_VOLUME_GROUP,
+					},
+				},
+			}, &identity.Capability{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_DO_NOT_ALLOW_VG_TO_DELETE_VOLUMES,
+					},
+				},
+			}, &identity.Capability{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_LIMIT_VOLUME_TO_ONE_VOLUME_GROUP,
+					},
+				},
+			}, &identity.Capability{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_MODIFY_VOLUME_GROUP,
+					},
+				},
+			}, &identity.Capability{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_GET_VOLUME_GROUP,
+					},
+				},
 			})
 	}
 
@@ -113,6 +143,20 @@ func (is *IdentityServer) GetCapabilities(
 				Type: &identity.Capability_ReclaimSpace_{
 					ReclaimSpace: &identity.Capability_ReclaimSpace{
 						Type: identity.Capability_ReclaimSpace_ONLINE,
+					},
+				},
+			},
+			&identity.Capability{
+				Type: &identity.Capability_EncryptionKeyRotation_{
+					EncryptionKeyRotation: &identity.Capability_EncryptionKeyRotation{
+						Type: identity.Capability_EncryptionKeyRotation_ENCRYPTIONKEYROTATION,
+					},
+				},
+			},
+			&identity.Capability{
+				Type: &identity.Capability_NetworkFence_{
+					NetworkFence: &identity.Capability_NetworkFence{
+						Type: identity.Capability_NetworkFence_GET_CLIENTS_TO_FENCE,
 					},
 				},
 			})

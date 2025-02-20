@@ -22,8 +22,6 @@ import (
 	"github.com/ceph/ceph-csi/internal/util/log"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	mount "k8s.io/mount-utils"
 )
 
@@ -33,14 +31,10 @@ type DefaultNodeServer struct {
 	Driver  *CSIDriver
 	Type    string
 	Mounter mount.Interface
-}
-
-// NodeExpandVolume returns unimplemented response.
-func (ns *DefaultNodeServer) NodeExpandVolume(
-	ctx context.Context,
-	req *csi.NodeExpandVolumeRequest,
-) (*csi.NodeExpandVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+	// NodeLabels stores the node labels
+	NodeLabels map[string]string
+	// CLIReadAffinityOptions contains map options passed through command line to enable read affinity.
+	CLIReadAffinityOptions string
 }
 
 // NodeGetInfo returns node ID.
@@ -92,7 +86,7 @@ func ConstructMountOptions(mountOptions []string, volCap *csi.VolumeCapability) 
 
 			return false
 		}
-		for _, f := range m.MountFlags {
+		for _, f := range m.GetMountFlags() {
 			if !hasOption(mountOptions, f) {
 				mountOptions = append(mountOptions, f)
 			}

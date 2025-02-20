@@ -23,6 +23,8 @@ ENV \
 
 COPY build.env /
 
+RUN mkdir -p /etc/selinux && touch /etc/selinux/config
+
 RUN source /build.env \
     && \
     ( test -n "${GOARCH}" && exit 0; echo -e "\n\nMissing GOARCH argument for building image, install Golang or run: make containerized-test GOARCH=amd64\n\n"; exit 1 ) \
@@ -32,8 +34,10 @@ RUN source /build.env \
 	gcc \
 	findutils \
 	librados-devel \
+        libcephfs-devel \
 	librbd-devel \
 	openssl \
+	ruby-devel \
 	rubygems \
 	ShellCheck \
 	codespell \
@@ -50,12 +54,13 @@ RUN source /build.env \
        | tar xzf - -C ${GOROOT} --strip-components=1 \
     && curl -sf "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_VERSION}/install.sh" \
        | bash -s -- -b ${GOPATH}/bin "${GOLANGCI_VERSION}" \
-    && curl -L https://git.io/get_helm.sh | bash -s -- --version "${HELM_VERSION}" \
+    && curl -L "${HELM_SCRIPT}" | bash -s -- --version "${HELM_VERSION}" \
     && mkdir /opt/commitlint && pushd /opt/commitlint \
     && npm init -y \
     && npm install @commitlint/cli@"${COMMITLINT_VERSION}" \
     && popd \
     && git config --global --add safe.directory ${CEPHCSIPATH} \
+    && go install github.com/augmentable-dev/tickgit/cmd/tickgit@latest \
     && true
 
 WORKDIR ${CEPHCSIPATH}

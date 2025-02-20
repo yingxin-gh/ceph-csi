@@ -18,11 +18,9 @@ package kms
 
 import (
 	"errors"
-	"os"
 	"testing"
 
 	loss "github.com/libopenstorage/secrets"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,23 +40,6 @@ func TestDetectAuthMountPath(t *testing.T) {
 	}
 	if authMountPath != "kubernetes" {
 		t.Errorf("authMountPath should be set to 'kubernetes', but is: %s", authMountPath)
-	}
-}
-
-func TestCreateTempFile(t *testing.T) {
-	t.Parallel()
-	data := []byte("Hello World!")
-	tmpfile, err := createTempFile("my-file", data)
-	if err != nil {
-		t.Errorf("createTempFile() failed: %s", err)
-	}
-	if tmpfile == "" {
-		t.Errorf("createTempFile() returned an empty filename")
-	}
-
-	err = os.Remove(tmpfile)
-	if err != nil {
-		t.Errorf("failed to remove tmpfile (%s): %s", tmpfile, err)
 	}
 }
 
@@ -113,8 +94,8 @@ func TestDefaultVaultDestroyKeys(t *testing.T) {
 	require.NoError(t, err)
 	keyContext := vc.getDeleteKeyContext()
 	destroySecret, ok := keyContext[loss.DestroySecret]
-	assert.NotEqual(t, destroySecret, "")
-	assert.True(t, ok)
+	require.NotEqual(t, "", destroySecret)
+	require.True(t, ok)
 
 	// setting vaultDestroyKeys to !true should remove the loss.DestroySecret entry
 	config["vaultDestroyKeys"] = "false"
@@ -122,11 +103,11 @@ func TestDefaultVaultDestroyKeys(t *testing.T) {
 	require.NoError(t, err)
 	keyContext = vc.getDeleteKeyContext()
 	_, ok = keyContext[loss.DestroySecret]
-	assert.False(t, ok)
+	require.False(t, ok)
 }
 
 func TestVaultKMSRegistered(t *testing.T) {
 	t.Parallel()
 	_, ok := kmsManager.providers[kmsTypeVault]
-	assert.True(t, ok)
+	require.True(t, ok)
 }

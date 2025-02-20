@@ -18,9 +18,9 @@ package e2e
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -87,15 +87,16 @@ func createDeploymentApp(clientSet kubernetes.Interface, app *appsv1.Deployment,
 // deleteDeploymentApp deletes the deployment object.
 func deleteDeploymentApp(clientSet kubernetes.Interface, name, ns string, deployTimeout int) error {
 	timeout := time.Duration(deployTimeout) * time.Minute
-	err := clientSet.AppsV1().Deployments(ns).Delete(context.TODO(), name, metav1.DeleteOptions{})
+	ctx := context.TODO()
+	err := clientSet.AppsV1().Deployments(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete deployment: %w", err)
 	}
 	start := time.Now()
 	framework.Logf("Waiting for deployment %q to be deleted", name)
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		_, err := clientSet.AppsV1().Deployments(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	return wait.PollUntilContextTimeout(ctx, poll, timeout, true, func(ctx context.Context) (bool, error) {
+		_, err := clientSet.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
@@ -118,8 +119,8 @@ func waitForDeploymentInAvailableState(clientSet kubernetes.Interface, name, ns 
 	start := time.Now()
 	framework.Logf("Waiting up to %q to be in Available state", name)
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		d, err := clientSet.AppsV1().Deployments(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(ctx context.Context) (bool, error) {
+		d, err := clientSet.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
@@ -145,8 +146,8 @@ func waitForDeploymentComplete(clientSet kubernetes.Interface, name, ns string, 
 		err        error
 	)
 	timeout := time.Duration(deployTimeout) * time.Minute
-	err = wait.PollImmediate(poll, timeout, func() (bool, error) {
-		deployment, err = clientSet.AppsV1().Deployments(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	err = wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(ctx context.Context) (bool, error) {
+		deployment, err = clientSet.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
@@ -175,7 +176,7 @@ func waitForDeploymentComplete(clientSet kubernetes.Interface, name, ns string, 
 		return false, nil
 	})
 
-	if errors.Is(err, wait.ErrWaitTimeout) {
+	if wait.Interrupted(err) {
 		err = fmt.Errorf("%s", reason)
 	}
 	if err != nil {
@@ -231,15 +232,16 @@ func (yr *yamlResource) Do(action kubectlAction) error {
 // replaceNamespaceInTemplate() on it. There are several options for adjusting
 // templates, each has their own comment.
 type yamlResourceNamespaced struct {
-	filename  string
-	namespace string
+	filename            string
+	namespace           string
+	domainLabel         string
+	crushLocationLabels string
 
 	// set the number of replicas in a Deployment to 1.
 	oneReplica bool
 
-	// enable topology support (for RBD)
-	enableTopology bool
-	domainLabel    string
+	// enable read affinity support (for RBD)
+	enableReadAffinity bool
 }
 
 func (yrn *yamlResourceNamespaced) Do(action kubectlAction) error {
@@ -248,55 +250,30 @@ func (yrn *yamlResourceNamespaced) Do(action kubectlAction) error {
 		return fmt.Errorf("failed to read content from %q: %w", yrn.filename, err)
 	}
 
+	data = replaceLogLevelInTemplate(data)
+
+	// disable VGS alpha feature, TODO: remove this in next release (3.14.0)
+	data = disableVGSAlphaCLIArg(data)
+
 	if yrn.oneReplica {
 		data = oneReplicaDeployYaml(data)
-	}
-
-	if yrn.enableTopology {
-		data = enableTopologyInTemplate(data)
 	}
 
 	if yrn.domainLabel != "" {
 		data = addTopologyDomainsToDSYaml(data, yrn.domainLabel)
 	}
 
+	if yrn.enableReadAffinity {
+		data = enableReadAffinityInTemplate(data)
+	}
+
+	if yrn.crushLocationLabels != "" {
+		data = addCrsuhLocationLabels(data, yrn.crushLocationLabels)
+	}
+
 	err = retryKubectlInput(yrn.namespace, action, data, deployTimeout)
 	if err != nil {
 		return fmt.Errorf("failed to %s resource %q in namespace %q: %w", action, yrn.filename, yrn.namespace, err)
-	}
-
-	return nil
-}
-
-type rookNFSResource struct {
-	f           *framework.Framework
-	modules     []string
-	orchBackend string
-}
-
-func (rnr *rookNFSResource) Do(action kubectlAction) error {
-	if action != kubectlCreate {
-		// we won't disabled modules
-		return nil
-	}
-
-	for _, module := range rnr.modules {
-		cmd := fmt.Sprintf("ceph mgr module enable %s", module)
-		_, _, err := execCommandInToolBoxPod(rnr.f, cmd, rookNamespace)
-		if err != nil {
-			// depending on the Ceph/Rook version, modules are
-			// enabled by default
-			framework.Logf("enabling module %q failed: %v", module, err)
-		}
-	}
-
-	if rnr.orchBackend != "" {
-		// this is not required for all Rook versions, allow failing
-		cmd := fmt.Sprintf("ceph orch set backend %s", rnr.orchBackend)
-		_, _, err := execCommandInToolBoxPod(rnr.f, cmd, rookNamespace)
-		if err != nil {
-			framework.Logf("setting orch backend %q failed: %v", rnr.orchBackend, err)
-		}
 	}
 
 	return nil
@@ -311,8 +288,8 @@ func waitForDeploymentUpdateScale(
 ) error {
 	t := time.Duration(timeout) * time.Minute
 	start := time.Now()
-	err := wait.PollImmediate(poll, t, func() (bool, error) {
-		scaleResult, upsErr := c.AppsV1().Deployments(ns).UpdateScale(context.TODO(),
+	err := wait.PollUntilContextTimeout(context.TODO(), poll, t, true, func(ctx context.Context) (bool, error) {
+		scaleResult, upsErr := c.AppsV1().Deployments(ns).UpdateScale(ctx,
 			deploymentName, scale, metav1.UpdateOptions{})
 		if upsErr != nil {
 			if isRetryableAPIError(upsErr) {
@@ -347,9 +324,9 @@ func waitForDeploymentUpdate(
 ) error {
 	t := time.Duration(timeout) * time.Minute
 	start := time.Now()
-	err := wait.PollImmediate(poll, t, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(context.TODO(), poll, t, true, func(ctx context.Context) (bool, error) {
 		_, upErr := c.AppsV1().Deployments(deployment.Namespace).Update(
-			context.TODO(), deployment, metav1.UpdateOptions{})
+			ctx, deployment, metav1.UpdateOptions{})
 		if upErr != nil {
 			if isRetryableAPIError(upErr) {
 				return false, nil
@@ -371,17 +348,6 @@ func waitForDeploymentUpdate(
 	return nil
 }
 
-// contains check if slice contains string.
-func contains(s []string, e string) bool {
-	for _, a := range s {
-		if a == e {
-			return true
-		}
-	}
-
-	return false
-}
-
 func waitForContainersArgsUpdate(
 	c kubernetes.Interface,
 	ns,
@@ -392,6 +358,7 @@ func waitForContainersArgsUpdate(
 	timeout int,
 ) error {
 	framework.Logf("waiting for deployment updates %s/%s", ns, deploymentName)
+	ctx := context.TODO()
 
 	// wait for the deployment to be available
 	err := waitForDeploymentInAvailableState(c, deploymentName, ns, deployTimeout)
@@ -400,7 +367,7 @@ func waitForContainersArgsUpdate(
 	}
 
 	// Scale down to 0.
-	scale, err := c.AppsV1().Deployments(ns).GetScale(context.TODO(), deploymentName, metav1.GetOptions{})
+	scale, err := c.AppsV1().Deployments(ns).GetScale(ctx, deploymentName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error get scale deployment %s/%s: %w", ns, deploymentName, err)
 	}
@@ -413,13 +380,13 @@ func waitForContainersArgsUpdate(
 	}
 
 	// Update deployment.
-	deployment, err := c.AppsV1().Deployments(ns).Get(context.TODO(), deploymentName, metav1.GetOptions{})
+	deployment, err := c.AppsV1().Deployments(ns).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error get deployment %s/%s: %w", ns, deploymentName, err)
 	}
 	cid := deployment.Spec.Template.Spec.Containers // cid: read as containers in deployment
 	for i := range cid {
-		if contains(containers, cid[i].Name) {
+		if slices.Contains(containers, cid[i].Name) {
 			match := false
 			for j, ak := range cid[i].Args {
 				if ak == key {
@@ -457,8 +424,8 @@ func waitForContainersArgsUpdate(
 	// wait for scale to become count
 	t := time.Duration(timeout) * time.Minute
 	start := time.Now()
-	err = wait.PollImmediate(poll, t, func() (bool, error) {
-		deploy, getErr := c.AppsV1().Deployments(ns).Get(context.TODO(), deploymentName, metav1.GetOptions{})
+	err = wait.PollUntilContextTimeout(ctx, poll, t, true, func(ctx context.Context) (bool, error) {
+		deploy, getErr := c.AppsV1().Deployments(ns).Get(ctx, deploymentName, metav1.GetOptions{})
 		if getErr != nil {
 			if isRetryableAPIError(getErr) {
 				return false, nil

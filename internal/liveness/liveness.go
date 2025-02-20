@@ -64,10 +64,10 @@ func recordLiveness(endpoint, drivername string, pollTime, timeout time.Duration
 	// register prometheus metrics
 	err := prometheus.Register(liveness)
 	if err != nil {
-		log.FatalLogMsg(err.Error())
+		log.FatalLogMsg("%v", err.Error())
 	}
 
-	csiConn, err := connlib.Connect(endpoint, liveMetricsManager)
+	csiConn, err := connlib.Connect(context.Background(), endpoint, liveMetricsManager)
 	if err != nil {
 		// connlib should retry forever so a returned error should mean
 		// the grpc client is misconfigured rather than an error on the network

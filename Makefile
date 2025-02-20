@@ -32,6 +32,11 @@ ifeq ($(HAVE_CPUSET),1)
     CPUSET ?= --cpuset-cpus=0-${CPUS}
 endif
 
+ifneq ($(GITHUB_ACTION),)
+    # see https://github.com/containers/podman/issues/21012
+    SECURITY_OPT ?= --security-opt seccomp=unconfined
+endif
+
 CSI_IMAGE_NAME=$(if $(ENV_CSI_IMAGE_NAME),$(ENV_CSI_IMAGE_NAME),quay.io/cephcsi/cephcsi)
 CSI_IMAGE_VERSION=$(shell . $(CURDIR)/build.env ; echo $${CSI_IMAGE_VERSION})
 CSI_IMAGE=$(CSI_IMAGE_NAME):$(CSI_IMAGE_VERSION)
@@ -47,9 +52,8 @@ endif
 GO_PROJECT=github.com/ceph/ceph-csi
 
 CEPH_VERSION ?= $(shell . $(CURDIR)/build.env ; echo $${CEPH_VERSION})
-# TODO: ceph_preview tag may be removed with go-ceph 0.17.0
-# TODO: ceph_ci_untested is added for subvolume metadata (go-ceph#691) and snapshot metadata management (go-ceph#698)
-GO_TAGS_LIST ?= $(CEPH_VERSION) ceph_preview ceph_ci_untested ceph_pre_quincy
+# TODO: ceph_preview tag required for FSQuiesce API
+GO_TAGS_LIST ?= $(CEPH_VERSION) ceph_preview
 
 # go build flags
 LDFLAGS ?=
@@ -145,6 +149,10 @@ check-env:
 
 codespell:
 	codespell --config scripts/codespell.conf
+
+tickgit:
+	tickgit $(CURDIR)
+
 #
 # commitlint will do a rebase on top of GIT_SINCE when REBASE=1 is passed.
 #
@@ -164,6 +172,10 @@ cephcsi: check-env
 e2e.test: check-env
 	go test $(GO_TAGS) -mod=vendor -c ./e2e
 
+.PHONY: rbd-group-snapshot
+rbd-group-snapshot:
+	go build -o _output/rbd-group-snapshot ./tools/rbd-group-snapshot
+
 #
 # Update the generated deploy/ files when the template changed. This requires
 # running 'go mod vendor' so update the API files under the vendor/ directory.
@@ -171,6 +183,10 @@ e2e.test: check-env
 generate-deploy:
 	go mod vendor
 	$(MAKE) -C deploy
+
+.PHONY: check-all-committed
+check-all-committed: ## Fail in case there are uncommitted changes
+	test -z "$(shell git status --short)" || (echo "files were modified: " ; git status --short ; false)
 
 #
 # e2e testing by compiling e2e.test in case it does not exist and running the
@@ -186,7 +202,7 @@ run-e2e: NAMESPACE ?= cephcsi-e2e-$(shell uuidgen | cut -d- -f1)
 run-e2e:
 	@test -e e2e.test || $(MAKE) e2e.test
 	cd e2e && \
-	../e2e.test -test.v -ginkgo.timeout="${E2E_TIMEOUT}" --deploy-timeout="${DEPLOY_TIMEOUT}" --cephcsi-namespace=$(NAMESPACE) $(E2E_ARGS)
+	../e2e.test -test.v -ginkgo.v -ginkgo.timeout="${E2E_TIMEOUT}" --deploy-timeout="${DEPLOY_TIMEOUT}" --cephcsi-namespace=$(NAMESPACE) $(E2E_ARGS)
 
 .container-cmd:
 	@test -n "$(shell which $(CONTAINER_CMD) 2>/dev/null)" || { echo "Missing container support, install Podman or Docker"; exit 1; }
@@ -222,7 +238,7 @@ ifeq ($(USE_PULLED_IMAGE),no)
 .test-container-id: .container-cmd build.env scripts/Dockerfile.test
 	[ ! -f .test-container-id ] || $(CONTAINER_CMD) rmi $(CSI_IMAGE_NAME):test
 	$(RM) .test-container-id
-	$(CONTAINER_CMD) build $(CPUSET) --build-arg GOARCH=$(GOARCH) -t $(CSI_IMAGE_NAME):test -f ./scripts/Dockerfile.test .
+	$(CONTAINER_CMD) build $(CPUSET) $(SECURITY_OPT) --build-arg GOARCH=$(GOARCH) -t $(CSI_IMAGE_NAME):test -f ./scripts/Dockerfile.test .
 	$(CONTAINER_CMD) inspect -f '{{.Id}}' $(CSI_IMAGE_NAME):test > .test-container-id
 else
 # create the .test-container-id file based on the pulled image

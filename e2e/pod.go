@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/conditions"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	frameworkPod "k8s.io/kubernetes/test/e2e/framework/pod"
 )
 
 const errRWOPConflict = "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode."
@@ -60,8 +62,8 @@ func waitForDaemonSets(name, ns string, c kubernetes.Interface, t int) error {
 	start := time.Now()
 	framework.Logf("Waiting up to %v for all daemonsets in namespace '%s' to start", timeout, ns)
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		ds, err := c.AppsV1().DaemonSets(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(ctx context.Context) (bool, error) {
+		ds, err := c.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			framework.Logf("Error getting daemonsets in namespace: '%s': %v", ns, err)
 			if strings.Contains(err.Error(), "not found") {
@@ -97,8 +99,8 @@ func findPodAndContainerName(f *framework.Framework, ns, cn string, opt *metav1.
 		podList *v1.PodList
 		listErr error
 	)
-	err := wait.PollImmediate(poll, timeout, func() (bool, error) {
-		podList, listErr = e2epod.PodClientNS(f, ns).List(context.TODO(), *opt)
+	err := wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(ctx context.Context) (bool, error) {
+		podList, listErr = e2epod.PodClientNS(f, ns).List(ctx, *opt)
 		if listErr != nil {
 			if isRetryableAPIError(listErr) {
 				return false, nil
@@ -164,6 +166,28 @@ func execCommandInDaemonsetPod(
 	f *framework.Framework,
 	c, daemonsetName, nodeName, containerName, ns string,
 ) (string, error) {
+	podName, err := getDaemonsetPodOnNode(f, daemonsetName, nodeName, ns)
+	if err != nil {
+		return "", err
+	}
+
+	cmd := []string{"/bin/sh", "-c", c}
+	podOpt := e2epod.ExecOptions{
+		Command:       cmd,
+		Namespace:     ns,
+		PodName:       podName,
+		ContainerName: containerName,
+		CaptureStdout: true,
+		CaptureStderr: true,
+	}
+
+	_ /* stdout */, stderr, err := execWithRetry(f, &podOpt)
+
+	return stderr, err
+}
+
+// getDaemonsetPodOnNode returns the name of a daemonset pod on a particular node.
+func getDaemonsetPodOnNode(f *framework.Framework, daemonsetName, nodeName, ns string) (string, error) {
 	selector, err := getDaemonSetLabelSelector(f, ns, daemonsetName)
 	if err != nil {
 		return "", err
@@ -187,19 +211,7 @@ func execCommandInDaemonsetPod(
 		return "", fmt.Errorf("%s daemonset pod on node %s in namespace %s not found", daemonsetName, nodeName, ns)
 	}
 
-	cmd := []string{"/bin/sh", "-c", c}
-	podOpt := e2epod.ExecOptions{
-		Command:       cmd,
-		Namespace:     ns,
-		PodName:       podName,
-		ContainerName: containerName,
-		CaptureStdout: true,
-		CaptureStderr: true,
-	}
-
-	_ /* stdout */, stderr, err := execWithRetry(f, &podOpt)
-
-	return stderr, err
+	return podName, nil
 }
 
 // listPods returns slice of pods matching given ListOptions and namespace.
@@ -215,7 +227,7 @@ func listPods(f *framework.Framework, ns string, opt *metav1.ListOptions) ([]v1.
 func execWithRetry(f *framework.Framework, opts *e2epod.ExecOptions) (string, string, error) {
 	timeout := time.Duration(deployTimeout) * time.Minute
 	var stdOut, stdErr string
-	err := wait.PollImmediate(poll, timeout, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(_ context.Context) (bool, error) {
 		var execErr error
 		stdOut, stdErr, execErr = e2epod.ExecWithOptions(f, *opts)
 		if execErr != nil {
@@ -312,7 +324,7 @@ func execCommandInPodAndAllowFail(f *framework.Framework, c, ns string, opt *met
 
 	stdOut, stdErr, err := execWithRetry(f, &podOpt)
 	if err != nil {
-		framework.Logf("command %s failed: %v", c, err)
+		framework.Logf("command %s failed: error:%v. stderror:%v", c, err, stdErr)
 	}
 
 	return stdOut, stdErr
@@ -353,8 +365,8 @@ func waitForPodInRunningState(name, ns string, c kubernetes.Interface, t int, ex
 	start := time.Now()
 	framework.Logf("Waiting up to %v to be in Running state", name)
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		pod, err := c.CoreV1().Pods(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(ctx context.Context) (bool, error) {
+		pod, err := c.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
@@ -369,8 +381,8 @@ func waitForPodInRunningState(name, ns string, c kubernetes.Interface, t int, ex
 			return false, conditions.ErrPodCompleted
 		case v1.PodPending:
 			if expectedError != "" {
-				events, err := c.CoreV1().Events(ns).List(context.TODO(), metav1.ListOptions{
-					FieldSelector: fmt.Sprintf("involvedObject.name=%s", name),
+				events, err := c.CoreV1().Events(ns).List(ctx, metav1.ListOptions{
+					FieldSelector: "involvedObject.name=" + name,
 				})
 				if err != nil {
 					return false, err
@@ -395,15 +407,16 @@ func waitForPodInRunningState(name, ns string, c kubernetes.Interface, t int, ex
 
 func deletePod(name, ns string, c kubernetes.Interface, t int) error {
 	timeout := time.Duration(t) * time.Minute
-	err := c.CoreV1().Pods(ns).Delete(context.TODO(), name, metav1.DeleteOptions{})
+	ctx := context.TODO()
+	err := c.CoreV1().Pods(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete app: %w", err)
 	}
 	start := time.Now()
 	framework.Logf("Waiting for pod %v to be deleted", name)
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		_, err := c.CoreV1().Pods(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	return wait.PollUntilContextTimeout(ctx, poll, timeout, true, func(ctx context.Context) (bool, error) {
+		_, err := c.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
@@ -420,7 +433,7 @@ func deletePod(name, ns string, c kubernetes.Interface, t int) error {
 	})
 }
 
-// nolint:unparam // currently skipNotFound is always false, this can change in the future
+//nolint:unparam // currently skipNotFound is always false, this can change in the future
 func deletePodWithLabel(label, ns string, skipNotFound bool) error {
 	err := retryKubectlArgs(
 		ns,
@@ -439,7 +452,7 @@ func deletePodWithLabel(label, ns string, skipNotFound bool) error {
 
 // calculateSHA512sum returns the sha512sum of a file inside a pod.
 func calculateSHA512sum(f *framework.Framework, app *v1.Pod, filePath string, opt *metav1.ListOptions) (string, error) {
-	cmd := fmt.Sprintf("sha512sum %s", filePath)
+	cmd := "sha512sum " + filePath
 	sha512sumOut, stdErr, err := execCommandInPod(f, cmd, app.Namespace, opt)
 	if err != nil {
 		return "", err
@@ -534,6 +547,175 @@ func validateRWOPPodCreation(
 	}
 
 	app.Name = baseAppName
+	err = deletePVCAndApp("", f, pvc, app)
+	if err != nil {
+		return fmt.Errorf("failed to delete PVC and application: %w", err)
+	}
+
+	return nil
+}
+
+// verifySeLinuxMountOption verifies the SeLinux context MountOption added to PV.Spec.MountOption
+// is successfully used by nodeplugin during mounting by checking for its presence in the
+// nodeplugin container logs.
+func verifySeLinuxMountOption(
+	f *framework.Framework,
+	pvcPath, appPath, daemonSetName, cn, ns string,
+) error {
+	mountOption := "context=\"system_u:object_r:container_file_t:s0:c0,c1\""
+
+	// create PVC
+	pvc, err := loadPVC(pvcPath)
+	if err != nil {
+		return fmt.Errorf("failed to load pvc: %w", err)
+	}
+	pvc.Namespace = f.UniqueName
+	err = createPVCAndvalidatePV(f.ClientSet, pvc, deployTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to create PVC: %w", err)
+	}
+	// modify PV spec.MountOptions
+	pv, err := getBoundPV(f.ClientSet, pvc)
+	if err != nil {
+		return fmt.Errorf("failed to get PV: %w", err)
+	}
+	pv.Spec.MountOptions = []string{mountOption}
+
+	// update PV
+	_, err = f.ClientSet.CoreV1().PersistentVolumes().Update(context.TODO(), pv, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update pv: %w", err)
+	}
+
+	app, err := loadApp(appPath)
+	if err != nil {
+		return fmt.Errorf("failed to load application: %w", err)
+	}
+	app.Namespace = f.UniqueName
+	err = createApp(f.ClientSet, app, deployTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to create application: %w", err)
+	}
+
+	pod, err := f.ClientSet.CoreV1().Pods(f.UniqueName).Get(context.TODO(), app.Name, metav1.GetOptions{})
+	if err != nil {
+		framework.Logf("Error occurred getting pod %s in namespace %s", app.Name, f.UniqueName)
+
+		return fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	nodepluginPodName, err := getDaemonsetPodOnNode(f, daemonSetName, pod.Spec.NodeName, ns)
+	if err != nil {
+		return fmt.Errorf("failed to get daemonset pod on node: %w", err)
+	}
+	logs, err := frameworkPod.GetPodLogs(context.TODO(), f.ClientSet, ns, nodepluginPodName, cn)
+	if err != nil {
+		return fmt.Errorf("failed to get pod logs from container %s/%s/%s : %w", ns, nodepluginPodName, cn, err)
+	}
+
+	if !strings.Contains(logs, mountOption) {
+		return fmt.Errorf("mount option %s not found in logs: %s", mountOption, logs)
+	}
+
+	err = deletePVCAndApp("", f, pvc, app)
+	if err != nil {
+		return fmt.Errorf("failed to delete PVC and application: %w", err)
+	}
+
+	return nil
+}
+
+// verifyReadAffinity verifies if read affinity is enabled by checking if read_from_replica
+// and crush_location options are present in the device config file (/sys/devices/rbd/0/config_info).
+func verifyReadAffinity(
+	f *framework.Framework,
+	pvcPath, appPath, daemonSetName, cn, ns string,
+) error {
+	readFromReplicaOption := "read_from_replica=localize"
+	expectedCrushLocationValues := map[string]string{
+		strings.Split(crushLocationRegionLabel, "/")[1]: crushLocationRegionValue,
+		strings.Split(crushLocationZoneLabel, "/")[1]:   crushLocationZoneValue,
+	}
+
+	// create PVC
+	pvc, err := loadPVC(pvcPath)
+	if err != nil {
+		return fmt.Errorf("failed to load pvc: %w", err)
+	}
+	pvc.Namespace = f.UniqueName
+	err = createPVCAndvalidatePV(f.ClientSet, pvc, deployTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to create PVC: %w", err)
+	}
+	app, err := loadApp(appPath)
+	if err != nil {
+		return fmt.Errorf("failed to load application: %w", err)
+	}
+	app.Namespace = f.UniqueName
+	err = createApp(f.ClientSet, app, deployTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to create application: %w", err)
+	}
+
+	imageInfo, err := getImageInfoFromPVC(pvc.Namespace, pvc.Name, f)
+	if err != nil {
+		return fmt.Errorf("failed to get imageInfo: %w", err)
+	}
+
+	selector, err := getDaemonSetLabelSelector(f, ns, daemonSetName)
+	if err != nil {
+		return fmt.Errorf("failed to get selector label %w", err)
+	}
+
+	opt := metav1.ListOptions{
+		LabelSelector: selector,
+	}
+
+	command := "cat /sys/devices/rbd/*/config_info"
+	configInfos, _, err := execCommandInContainer(f, command, ns, cn, &opt)
+	if err != nil {
+		return fmt.Errorf("failed to execute command %s: %w", command, err)
+	}
+
+	var configInfo string
+	for _, config := range strings.Split(configInfos, "\n") {
+		if config == "" || !strings.Contains(config, imageInfo.imageName) {
+			continue
+		}
+		configInfo = config
+
+		break
+	}
+
+	if configInfo == "" {
+		return errors.New("failed to get config_info file")
+	}
+
+	if !strings.Contains(configInfo, readFromReplicaOption) {
+		return fmt.Errorf("option %s not found in config_info: %s", readFromReplicaOption, configInfo)
+	}
+
+	crushLocationPattern := "crush_location=([^,]+)"
+	regex := regexp.MustCompile(crushLocationPattern)
+	match := regex.FindString(configInfo)
+	if match == "" {
+		return fmt.Errorf("option crush_location not found in config_info: %s", configInfo)
+	}
+
+	crushLocationValue := strings.Split(match, "=")[1]
+	keyValues := strings.Split(crushLocationValue, "|")
+	actualCrushLocationValues := make(map[string]string)
+
+	for _, keyValue := range keyValues {
+		s := strings.Split(keyValue, ":")
+		actualCrushLocationValues[s[0]] = s[1]
+	}
+	for key, expectedValue := range expectedCrushLocationValues {
+		if actualValue, exists := actualCrushLocationValues[key]; !(exists && actualValue == expectedValue) {
+			return fmt.Errorf("crush location %s:%s not found in config_info : %s", key, expectedValue, configInfo)
+		}
+	}
+
 	err = deletePVCAndApp("", f, pvc, app)
 	if err != nil {
 		return fmt.Errorf("failed to delete PVC and application: %w", err)

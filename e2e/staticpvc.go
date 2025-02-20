@@ -93,7 +93,7 @@ func getStaticPVC(name, pvName, size, ns, sc string, blockPVC bool) *v1.Persiste
 			Namespace: ns,
 		},
 		Spec: v1.PersistentVolumeClaimSpec{
-			Resources: v1.ResourceRequirements{
+			Resources: v1.VolumeResourceRequirements{
 				Requests: v1.ResourceList{
 					v1.ResourceStorage: resource.MustParse(size),
 				},
@@ -322,8 +322,8 @@ func validateRBDStaticMigrationPVC(f *framework.Framework, appPath, scName strin
 	return err
 }
 
-// nolint:gocyclo,cyclop // reduce complexity
-func validateCephFsStaticPV(f *framework.Framework, appPath, scPath string) error {
+//nolint:gocyclo,cyclop // reduce complexity
+func validateCephFsStaticPV(f *framework.Framework, appPath, scPath, fsName string) error {
 	opt := make(map[string]string)
 	var (
 		cephFsVolName = "testSubVol"
@@ -406,7 +406,9 @@ func validateCephFsStaticPV(f *framework.Framework, appPath, scPath string) erro
 	}
 
 	opt["clusterID"] = fsID
-	opt["fsName"] = fileSystemName
+	if fsName != "" {
+		opt["fsName"] = fsName
+	}
 	opt["staticVolume"] = strconv.FormatBool(true)
 	opt["rootPath"] = rootPath
 	pv := getStaticPV(

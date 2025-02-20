@@ -17,8 +17,6 @@ limitations under the License.
 package csicommon
 
 import (
-	"fmt"
-
 	"github.com/ceph/ceph-csi/internal/util/log"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -32,16 +30,22 @@ type CSIDriver struct {
 	name    string
 	nodeID  string
 	version string
+
+	// instance is the instance ID that is unique to an instance of CSI, used when sharing
+	// ceph clusters across CSI instances, to differentiate omap names per CSI instance.
+	instance string
+
 	// topology constraints that this nodeserver will advertise
-	topology     map[string]string
-	capabilities []*csi.ControllerServiceCapability
-	vc           []*csi.VolumeCapability_AccessMode
+	topology          map[string]string
+	capabilities      []*csi.ControllerServiceCapability
+	groupCapabilities []*csi.GroupControllerServiceCapability
+	vc                []*csi.VolumeCapability_AccessMode
 }
 
 // NewCSIDriver Creates a NewCSIDriver object. Assumes vendor
 // version is equal to driver version &  does not support optional
 // driver plugin info manifest field. Refer to CSI spec for more details.
-func NewCSIDriver(name, v, nodeID string) *CSIDriver {
+func NewCSIDriver(name, v, nodeID, instance string) *CSIDriver {
 	if name == "" {
 		klog.Errorf("Driver name missing")
 
@@ -60,13 +64,25 @@ func NewCSIDriver(name, v, nodeID string) *CSIDriver {
 		return nil
 	}
 
+	if instance == "" {
+		klog.Errorf("Instance argument missing")
+
+		return nil
+	}
+
 	driver := CSIDriver{
-		name:    name,
-		version: v,
-		nodeID:  nodeID,
+		name:     name,
+		version:  v,
+		nodeID:   nodeID,
+		instance: instance,
 	}
 
 	return &driver
+}
+
+// GetInstance returns the instance identification of the CSI driver.
+func (d *CSIDriver) GetInstanceID() string {
+	return d.instance
 }
 
 // ValidateControllerServiceRequest validates the controller
@@ -82,7 +98,7 @@ func (d *CSIDriver) ValidateControllerServiceRequest(c csi.ControllerServiceCapa
 		}
 	}
 
-	return status.Error(codes.InvalidArgument, fmt.Sprintf("%s", c)) //nolint
+	return status.Error(codes.InvalidArgument, c.String())
 }
 
 // AddControllerServiceCapabilities stores the controller capabilities
@@ -115,4 +131,33 @@ func (d *CSIDriver) AddVolumeCapabilityAccessModes(
 // GetVolumeCapabilityAccessModes returns access modes.
 func (d *CSIDriver) GetVolumeCapabilityAccessModes() []*csi.VolumeCapability_AccessMode {
 	return d.vc
+}
+
+// AddControllerServiceCapabilities stores the group controller capabilities
+// in driver object.
+func (d *CSIDriver) AddGroupControllerServiceCapabilities(cl []csi.GroupControllerServiceCapability_RPC_Type) {
+	csc := make([]*csi.GroupControllerServiceCapability, 0, len(cl))
+
+	for _, c := range cl {
+		log.DefaultLog("Enabling group controller service capability: %v", c.String())
+		csc = append(csc, NewGroupControllerServiceCapability(c))
+	}
+
+	d.groupCapabilities = csc
+}
+
+// ValidateGroupControllerServiceRequest validates the group controller
+// plugin capabilities.
+func (d *CSIDriver) ValidateGroupControllerServiceRequest(c csi.GroupControllerServiceCapability_RPC_Type) error {
+	if c == csi.GroupControllerServiceCapability_RPC_UNKNOWN {
+		return nil
+	}
+
+	for _, capability := range d.groupCapabilities {
+		if c == capability.GetRpc().GetType() {
+			return nil
+		}
+	}
+
+	return status.Error(codes.InvalidArgument, c.String())
 }

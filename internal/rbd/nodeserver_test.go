@@ -18,10 +18,16 @@ package rbd
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 
+	cephcsi "github.com/ceph/ceph-csi/api/deploy/kubernetes"
+	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
+	"github.com/ceph/ceph-csi/internal/util"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetStagingPath(t *testing.T) {
@@ -98,59 +104,11 @@ func TestParseBoolOption(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tc := tt
-		val := parseBoolOption(ctx, tc.scParameters, optionName, defaultValue)
-		if val != tc.expect {
+		val := parseBoolOption(ctx, tt.scParameters, optionName, defaultValue)
+		if val != tt.expect {
 			t.Errorf("parseBoolOption(%v) returned: %t, expected: %t",
-				tc.scParameters, val, tc.expect)
+				tt.scParameters, val, tt.expect)
 		}
-	}
-}
-
-func TestNodeServer_SetReadAffinityMapOptions(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name             string
-		crushLocationmap map[string]string
-		wantAny          []string
-	}{
-		{
-			name:             "nil crushLocationmap",
-			crushLocationmap: nil,
-			wantAny:          []string{""},
-		},
-		{
-			name:             "empty crushLocationmap",
-			crushLocationmap: map[string]string{},
-			wantAny:          []string{""},
-		},
-		{
-			name: "single entry in crushLocationmap",
-			crushLocationmap: map[string]string{
-				"region": "east",
-			},
-			wantAny: []string{"read_from_replica=localize,crush_location=region:east"},
-		},
-		{
-			name: "multiple entries in crushLocationmap",
-			crushLocationmap: map[string]string{
-				"region": "east",
-				"zone":   "east-1",
-			},
-			wantAny: []string{
-				"read_from_replica=localize,crush_location=region:east|zone:east-1",
-				"read_from_replica=localize,crush_location=zone:east-1|region:east",
-			},
-		},
-	}
-	for _, tt := range tests {
-		currentTT := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			ns := &NodeServer{}
-			ns.SetReadAffinityMapOptions(currentTT.crushLocationmap)
-			assert.Contains(t, currentTT.wantAny, ns.readAffinityMapOptions)
-		})
 	}
 }
 
@@ -229,18 +187,127 @@ func TestNodeServer_appendReadAffinityMapOptions(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		currentTT := tt
-		t.Run(currentTT.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rv := &rbdVolume{
-				MapOptions: currentTT.args.mapOptions,
-				Mounter:    currentTT.args.mounter,
+				MapOptions: tt.args.mapOptions,
+				Mounter:    tt.args.mounter,
 			}
+			rv.appendReadAffinityMapOptions(tt.args.readAffinityMapOptions)
+			require.Equal(t, tt.want, rv.MapOptions)
+		})
+	}
+}
+
+func TestReadAffinity_GetReadAffinityMapOptions(t *testing.T) {
+	t.Parallel()
+
+	nodeLabels := map[string]string{
+		"topology.kubernetes.io/zone":   "east-1",
+		"topology.kubernetes.io/region": "east",
+	}
+	topology := map[string]string{}
+
+	csiConfig := []cephcsi.ClusterInfo{
+		{
+			ClusterID: "cluster-1",
+			ReadAffinity: cephcsi.ReadAffinity{
+				Enabled: true,
+				CrushLocationLabels: []string{
+					"topology.kubernetes.io/region",
+				},
+			},
+		},
+		{
+			ClusterID: "cluster-2",
+			ReadAffinity: cephcsi.ReadAffinity{
+				Enabled: false,
+				CrushLocationLabels: []string{
+					"topology.kubernetes.io/region",
+				},
+			},
+		},
+		{
+			ClusterID: "cluster-3",
+			ReadAffinity: cephcsi.ReadAffinity{
+				Enabled:             true,
+				CrushLocationLabels: []string{},
+			},
+		},
+		{
+			ClusterID: "cluster-4",
+		},
+	}
+
+	csiConfigFileContent, err := json.Marshal(csiConfig)
+	if err != nil {
+		t.Errorf("failed to marshal csi config info %v", err)
+	}
+	tmpConfPath := t.TempDir() + "/ceph-csi.json"
+
+	err = os.WriteFile(tmpConfPath, csiConfigFileContent, 0o600)
+	if err != nil {
+		t.Errorf("failed to write %s file content: %v", util.CsiConfigFile, err)
+	}
+
+	tests := []struct {
+		name                   string
+		clusterID              string
+		CLICrushLocationLabels string
+		want                   string
+	}{
+		{
+			name:                   "Enabled in cluster-1 and Enabled in CLI",
+			clusterID:              "cluster-1",
+			CLICrushLocationLabels: "topology.kubernetes.io/region",
+			want:                   "read_from_replica=localize,crush_location=region:east",
+		},
+		{
+			name:                   "Disabled in cluster-2 and Enabled in CLI",
+			clusterID:              "cluster-2",
+			CLICrushLocationLabels: "topology.kubernetes.io/zone",
+			want:                   "",
+		},
+		{
+			name:                   "Enabled in cluster-3 with empty crush labels and Enabled in CLI",
+			clusterID:              "cluster-3",
+			CLICrushLocationLabels: "topology.kubernetes.io/zone",
+			want:                   "read_from_replica=localize,crush_location=zone:east-1",
+		},
+		{
+			name:                   "Enabled in cluster-3 with empty crush labels and Disabled in CLI",
+			clusterID:              "cluster-3",
+			CLICrushLocationLabels: "",
+			want:                   "",
+		},
+		{
+			name:                   "Absent in cluster-4 and Enabled in CLI",
+			clusterID:              "cluster-4",
+			CLICrushLocationLabels: "topology.kubernetes.io/zone",
+			want:                   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			crushLocationMap := util.GetCrushLocationMap(tt.CLICrushLocationLabels, nodeLabels)
+			cliReadAffinityMapOptions := util.ConstructReadAffinityMapOption(crushLocationMap)
+			driver := &csicommon.CSIDriver{}
+
 			ns := &NodeServer{
-				readAffinityMapOptions: currentTT.args.readAffinityMapOptions,
+				DefaultNodeServer: csicommon.NewDefaultNodeServer(
+					driver, "rbd", cliReadAffinityMapOptions, topology, nodeLabels,
+				),
 			}
-			ns.appendReadAffinityMapOptions(rv)
-			assert.Equal(t, currentTT.want, rv.MapOptions)
+			readAffinityMapOptions, err := util.GetReadAffinityMapOptions(
+				tmpConfPath, tt.clusterID, ns.CLIReadAffinityOptions, nodeLabels,
+			)
+			if err != nil {
+				require.Fail(t, err.Error())
+			}
+
+			require.Equal(t, tt.want, readAffinityMapOptions)
 		})
 	}
 }

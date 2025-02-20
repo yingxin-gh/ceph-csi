@@ -200,7 +200,7 @@ if [[ "${VM_DRIVER}" == "kvm2" ]]; then
     DISK="vda1"
 fi
 
-if [[ "${VM_DRIVER}" == "kvm2" ]] || [[ "${VM_DRIVER}" == "hyperkit" ]]; then
+if [[ "${VM_DRIVER}" == "kvm2" ]] || [[ "${VM_DRIVER}" == "hyperkit" ]] || [[ "${VM_DRIVER}" == "qemu2" ]]; then
     # adding extra disks is only supported on kvm2 and hyperkit
     DISK_CONFIG=${DISK_CONFIG:-" --extra-disks=${NUM_DISKS} --disk-size=${DISK_SIZE} "}
 else
@@ -219,7 +219,7 @@ K8S_FEATURE_GATES=${K8S_FEATURE_GATES:-""}
 
 # kubelet.resolv-conf needs to point to a file, not a symlink
 # the default minikube VM has /etc/resolv.conf -> /run/systemd/resolve/resolv.conf
-RESOLV_CONF='/run/systemd/resolve/resolv.conf'
+RESOLV_CONF="${RESOLV_CONF:-/run/systemd/resolve/resolv.conf}"
 if { [[ "${VM_DRIVER}" == "none" ]] || [[ "${VM_DRIVER}" == "podman" ]]; } && [[ ! -e "${RESOLV_CONF}" ]]; then
 	# in case /run/systemd/resolve/resolv.conf does not exist, use the
 	# standard /etc/resolv.conf (with symlink resolved)
@@ -255,20 +255,13 @@ up)
         install_podman_wrapper
     fi
 
-    disable_storage_addons
-
-    #  get kubernetes version we are operating on and accordingly enable feature gates
-    KUBE_MAJOR=$(kube_version 1)
-    KUBE_MINOR=$(kube_version 2)
-    if [ "${KUBE_MAJOR}" -eq 1 ] && [ "${KUBE_MINOR}" -ge 22 ];then
-        K8S_FEATURE_GATES="${K8S_FEATURE_GATES},ReadWriteOncePod=true"
-    fi
-    if [ "${KUBE_MAJOR}" -eq 1 ] && [ "${KUBE_MINOR}" -ge 23 ];then
-        K8S_FEATURE_GATES="${K8S_FEATURE_GATES},RecoverVolumeExpansionFailure=true"
-    fi
     # shellcheck disable=SC2086
     ${minikube} start --force --memory="${MEMORY}" --cpus="${CPUS}" -b kubeadm --kubernetes-version="${KUBE_VERSION}" --driver="${VM_DRIVER}" --feature-gates="${K8S_FEATURE_GATES}" --cni="${CNI}" ${EXTRA_CONFIG}  --wait-timeout="${MINIKUBE_WAIT_TIMEOUT}" --wait="${MINIKUBE_WAIT}" --delete-on-failure ${DISK_CONFIG}
-
+    # shellcheck disable=SC2086
+    ${minikube} ssh "sudo  sed -i 's/\(ExecStart=\/var.*\)/\1 --v=4/' /etc/systemd/system/kubelet.service.d/10-kubeadm.conf"
+    ${minikube} ssh "sudo systemctl daemon-reload"
+    ${minikube} ssh "sudo systemctl restart kubelet"
+    ${minikube} ssh "ps -Af |grep kubelet"
     # create a link so the default dataDirHostPath will work for this
     # environment
     if [[ "${VM_DRIVER}" != "none" ]] && [[ "${VM_DRIVER}" != "podman" ]]; then
@@ -279,6 +272,7 @@ up)
     if [[ "${VM_DRIVER}" = "podman" ]]; then
         ${minikube} ssh "sudo mount -oremount,rw /sys"
     fi
+    disable_storage_addons
     ${minikube} kubectl -- cluster-info
     ;;
 down)

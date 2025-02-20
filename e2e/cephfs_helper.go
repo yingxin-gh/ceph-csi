@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
+	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -66,6 +66,7 @@ func createCephfsStorageClass(
 	if err != nil {
 		return err
 	}
+
 	sc.Parameters["fsName"] = fileSystemName
 	sc.Parameters["csi.storage.k8s.io/provisioner-secret-namespace"] = cephCSINamespace
 	sc.Parameters["csi.storage.k8s.io/provisioner-secret-name"] = cephFSProvisionerSecretName
@@ -102,8 +103,8 @@ func createCephfsStorageClass(
 
 	timeout := time.Duration(deployTimeout) * time.Minute
 
-	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		_, err = c.StorageV1().StorageClasses().Create(context.TODO(), &sc, metav1.CreateOptions{})
+	return wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(ctx context.Context) (bool, error) {
+		_, err = c.StorageV1().StorageClasses().Create(ctx, &sc, metav1.CreateOptions{})
 		if err != nil {
 			framework.Logf("error creating StorageClass %q: %v", sc.Name, err)
 			if isRetryableAPIError(err) {
@@ -126,6 +127,9 @@ func createCephfsSecret(f *framework.Framework, secretName, userName, userKey st
 	if secretName != "" {
 		sc.Name = secretName
 	}
+	// TODO: Update the secrets to use userID and userKey once
+	// the version used for upgrade testing does not depend on
+	// adminID and adminKey.
 	sc.StringData["adminID"] = userName
 	sc.StringData["adminKey"] = userKey
 	delete(sc.StringData, "userID")
@@ -184,6 +188,15 @@ func deleteBackingCephFSVolume(f *framework.Framework, pvc *v1.PersistentVolumeC
 	}
 
 	return nil
+}
+
+func cephfsOptions(pool string) string {
+	if radosNamespace != "" {
+		return "--pool=" + pool + " --namespace=" + radosNamespace
+	}
+
+	// default namespace is csi
+	return "--pool=" + pool + " --namespace=csi"
 }
 
 type cephfsSubVolume struct {
@@ -337,7 +350,7 @@ func getSnapName(snapNamespace, snapName string) (string, error) {
 	}
 	snapIDRegex := regexp.MustCompile(`(\w+\-?){5}$`)
 	snapID := snapIDRegex.FindString(*sc.Status.SnapshotHandle)
-	snapshotName := fmt.Sprintf("csi-snap-%s", snapID)
+	snapshotName := "csi-snap-" + snapID
 	framework.Logf("snapshotName= %s", snapshotName)
 
 	return snapshotName, nil
@@ -391,10 +404,10 @@ func validateEncryptedCephfs(f *framework.Framework, pvName, appName string) err
 		LabelSelector: selector,
 	}
 
-	cmd := fmt.Sprintf("getfattr --name=ceph.fscrypt.auth --only-values %s", volumeMountPath)
+	cmd := "getfattr --name=ceph.fscrypt.auth --only-values " + volumeMountPath
 	_, _, err = execCommandInContainer(f, cmd, cephCSINamespace, "csi-cephfsplugin", &opt)
 	if err != nil {
-		cmd = fmt.Sprintf("getfattr --recursive --dump %s", volumeMountPath)
+		cmd = "getfattr --recursive --dump " + volumeMountPath
 		stdOut, stdErr, listErr := execCommandInContainer(f, cmd, cephCSINamespace, "csi-cephfsplugin", &opt)
 		if listErr == nil {
 			return fmt.Errorf("error checking for cephfs fscrypt xattr on %q. listing: %s %s",

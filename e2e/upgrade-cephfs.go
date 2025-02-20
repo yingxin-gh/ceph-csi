@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	. "github.com/onsi/ginkgo/v2" // nolint
+	. "github.com/onsi/ginkgo/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -125,7 +125,7 @@ var _ = Describe("CephFS Upgrade Testing", func() {
 			logsCSIPods("app=csi-cephfsplugin", c)
 
 			// log all details from the namespace where Ceph-CSI is deployed
-			e2edebug.DumpAllNamespaceInfo(c, cephCSINamespace)
+			e2edebug.DumpAllNamespaceInfo(context.TODO(), c, cephCSINamespace)
 		}
 		err = deleteConfigMap(cephFSDirPath)
 		if err != nil {
@@ -234,7 +234,7 @@ var _ = Describe("CephFS Upgrade Testing", func() {
 				}
 
 				// force an immediate write of all cached data to disk.
-				_, stdErr = execCommandInPodAndAllowFail(f, fmt.Sprintf("sync %s", filePath), app.Namespace, &opt)
+				_, stdErr = execCommandInPodAndAllowFail(f, "sync "+filePath, app.Namespace, &opt)
 				if stdErr != "" {
 					framework.Failf("failed to sync data to a disk %s", stdErr)
 				}

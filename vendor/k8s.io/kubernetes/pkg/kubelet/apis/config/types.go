@@ -88,6 +88,11 @@ type KubeletConfiguration struct {
 	// staticPodPath is the path to the directory containing local (static) pods to
 	// run, or the path to a single static pod file.
 	StaticPodPath string
+	// podLogsDir is a custom root directory path kubelet will use to place pod's log files.
+	// Default: "/var/log/pods/"
+	// Note: it is not recommended to use the temp folder as a log directory as it may cause
+	// unexpected behavior in many places.
+	PodLogsDir string
 	// syncFrequency is the max period between synchronizing running
 	// containers and config
 	SyncFrequency metav1.Duration
@@ -123,6 +128,7 @@ type KubeletConfiguration struct {
 	// tlsPrivateKeyFile is the file containing x509 private key matching tlsCertFile
 	TLSPrivateKeyFile string
 	// TLSCipherSuites is the list of allowed cipher suites for the server.
+	// Note that TLS 1.3 ciphersuites are not configurable.
 	// Values are from tls package constants (https://golang.org/pkg/crypto/tls/#pkg-constants).
 	TLSCipherSuites []string
 	// TLSMinVersion is the minimum TLS version supported.
@@ -159,7 +165,7 @@ type KubeletConfiguration struct {
 	// enableDebuggingHandlers enables server endpoints for log collection
 	// and local running of containers and commands
 	EnableDebuggingHandlers bool
-	// enableContentionProfiling enables lock contention profiling, if enableDebuggingHandlers is true.
+	// enableContentionProfiling enables block profiling, if enableDebuggingHandlers is true.
 	EnableContentionProfiling bool
 	// healthzPort is the port of the localhost healthz endpoint (set to 0 to disable)
 	HealthzPort int32
@@ -191,9 +197,13 @@ type KubeletConfiguration struct {
 	NodeStatusReportFrequency metav1.Duration
 	// nodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease.
 	NodeLeaseDurationSeconds int32
-	// imageMinimumGCAge is the minimum age for an unused image before it is
+	// ImageMinimumGCAge is the minimum age for an unused image before it is
 	// garbage collected.
 	ImageMinimumGCAge metav1.Duration
+	// ImageMaximumGCAge is the maximum age an image can be unused before it is garbage collected.
+	// The default of this field is "0s", which disables this field--meaning images won't be garbage
+	// collected based on being unused for too long.
+	ImageMaximumGCAge metav1.Duration
 	// imageGCHighThresholdPercent is the percent of disk usage after which
 	// image garbage collection is always run. The percent is calculated as
 	// this field value out of 100.
@@ -219,6 +229,10 @@ type KubeletConfiguration struct {
 	CgroupsPerQOS bool
 	// driver that the kubelet uses to manipulate cgroups on the host (cgroupfs or systemd)
 	CgroupDriver string
+	// SingleProcessOOMKill, if true, will prevent the `memory.oom.group` flag from being set for container
+	// cgroups in cgroups v2. This causes processes in the container to be OOM killed individually instead of as
+	// a group. It means that if true, the behavior aligns with the behavior of cgroups v1.
+	SingleProcessOOMKill *bool
 	// CPUManagerPolicy is the name of the policy to use.
 	// Requires the CPUManager feature gate to be enabled.
 	CPUManagerPolicy string
@@ -233,11 +247,9 @@ type KubeletConfiguration struct {
 	// Requires the MemoryManager feature gate to be enabled.
 	MemoryManagerPolicy string
 	// TopologyManagerPolicy is the name of the policy to use.
-	// Policies other than "none" require the TopologyManager feature gate to be enabled.
 	TopologyManagerPolicy string
 	// TopologyManagerScope represents the scope of topology hint generation
 	// that topology manager requests and hint providers generate.
-	// "pod" scope requires the TopologyManager feature gate to be enabled.
 	// Default: "container"
 	// +optional
 	TopologyManagerScope string
@@ -273,6 +285,7 @@ type KubeletConfiguration struct {
 	ResolverConfig string
 	// RunOnce causes the Kubelet to check the API server once for pods,
 	// run those in addition to the pods specified by static pod files, and exit.
+	// Deprecated: no longer has any effect.
 	RunOnce bool
 	// cpuCFSQuota enables CPU CFS quota enforcement for containers that
 	// specify CPU limits
@@ -292,6 +305,8 @@ type KubeletConfiguration struct {
 	KubeAPIBurst int32
 	// serializeImagePulls when enabled, tells the Kubelet to pull images one at a time.
 	SerializeImagePulls bool
+	// MaxParallelImagePulls sets the maximum number of image pulls in parallel.
+	MaxParallelImagePulls *int32
 	// Map of signal names to quantities that defines hard eviction thresholds. For example: {"memory.available": "300Mi"}.
 	// Some default signals are Linux only: nodefs.inodesFree
 	EvictionHard map[string]string
@@ -318,17 +333,15 @@ type KubeletConfiguration struct {
 	// flags are not as it expects. Otherwise the Kubelet will attempt to modify
 	// kernel flags to match its expectation.
 	ProtectKernelDefaults bool
-	// If true, Kubelet ensures a set of iptables rules are present on host.
-	// These rules will serve as utility for various components, e.g. kube-proxy.
-	// The rules will be created based on IPTablesMasqueradeBit and IPTablesDropBit.
+	// If true, Kubelet creates the KUBE-IPTABLES-HINT chain in iptables as a hint to
+	// other components about the configuration of iptables on the system.
 	MakeIPTablesUtilChains bool
-	// iptablesMasqueradeBit is the bit of the iptables fwmark space to mark for SNAT
-	// Values must be within the range [0, 31]. Must be different from other mark bits.
-	// Warning: Please match the value of the corresponding parameter in kube-proxy.
-	// TODO: clean up IPTablesMasqueradeBit in kube-proxy
+	// iptablesMasqueradeBit formerly controlled the creation of the KUBE-MARK-MASQ
+	// chain.
+	// Deprecated: no longer has any effect.
 	IPTablesMasqueradeBit int32
-	// iptablesDropBit is the bit of the iptables fwmark space to mark for dropping packets.
-	// Values must be within the range [0, 31]. Must be different from other mark bits.
+	// iptablesDropBit formerly controlled the creation of the KUBE-MARK-DROP chain.
+	// Deprecated: no longer has any effect.
 	IPTablesDropBit int32
 	// featureGates is a map of feature names to bools that enable or disable alpha/experimental
 	// features. This field modifies piecemeal the built-in default values from
@@ -344,6 +357,11 @@ type KubeletConfiguration struct {
 	ContainerLogMaxSize string
 	// Maximum number of container log files that can be present for a container.
 	ContainerLogMaxFiles int32
+	// Maximum number of concurrent log rotation workers to spawn for processing the log rotation
+	// requests
+	ContainerLogMaxWorkers int32
+	// Interval at which the container logs are monitored for rotation
+	ContainerLogMonitorInterval metav1.Duration
 	// ConfigMapAndSecretChangeDetectionStrategy is a mode in which config map and secret managers are running.
 	ConfigMapAndSecretChangeDetectionStrategy ResourceChangeDetectionStrategy
 	// A comma separated allowlist of unsafe sysctls or sysctl patterns (ending in `*`).
@@ -361,22 +379,22 @@ type KubeletConfiguration struct {
 	// A set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=150G,ephemeral-storage=1G,pid=100) pairs
 	// that describe resources reserved for non-kubernetes components.
 	// Currently only cpu, memory and local ephemeral storage for root file system are supported.
-	// See http://kubernetes.io/docs/user-guide/compute-resources for more detail.
+	// See https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources for more detail.
 	SystemReserved map[string]string
 	// A set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=150G,ephemeral-storage=1G,pid=100) pairs
 	// that describe resources reserved for kubernetes system components.
 	// Currently only cpu, memory and local ephemeral storage for root file system are supported.
-	// See http://kubernetes.io/docs/user-guide/compute-resources for more detail.
+	// See https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources for more detail.
 	KubeReserved map[string]string
 	// This flag helps kubelet identify absolute name of top level cgroup used to enforce `SystemReserved` compute resource reservation for OS system daemons.
-	// Refer to [Node Allocatable](https://git.k8s.io/community/contributors/design-proposals/node/node-allocatable.md) doc for more information.
+	// Refer to [Node Allocatable](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable) doc for more information.
 	SystemReservedCgroup string
 	// This flag helps kubelet identify absolute name of top level cgroup used to enforce `KubeReserved` compute resource reservation for Kubernetes node system daemons.
-	// Refer to [Node Allocatable](https://git.k8s.io/community/contributors/design-proposals/node/node-allocatable.md) doc for more information.
+	// Refer to [Node Allocatable](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable) doc for more information.
 	KubeReservedCgroup string
 	// This flag specifies the various Node Allocatable enforcements that Kubelet needs to perform.
 	// This flag accepts a list of options. Acceptable options are `pods`, `system-reserved` & `kube-reserved`.
-	// Refer to [Node Allocatable](https://github.com/kubernetes/design-proposals-archive/blob/main/node/node-allocatable.md) doc for more information.
+	// Refer to [Node Allocatable](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable) doc for more information.
 	EnforceNodeAllocatable []string
 	// This option specifies the cpu list reserved for the host level system threads and kubernetes related threads.
 	// This provide a "static" CPU list rather than the "dynamic" list by system-reserved and kube-reserved.
@@ -393,6 +411,13 @@ type KubeletConfiguration struct {
 	Logging logsapi.LoggingConfiguration
 	// EnableSystemLogHandler enables /logs handler.
 	EnableSystemLogHandler bool
+	// EnableSystemLogQuery enables the node log query feature on the /logs endpoint.
+	// EnableSystemLogHandler has to be enabled in addition for this feature to work.
+	// Enabling this feature has security implications. The recommendation is to enable it on a need basis for debugging
+	// purposes and disabling otherwise.
+	// +featureGate=NodeLogQuery
+	// +optional
+	EnableSystemLogQuery bool
 	// ShutdownGracePeriod specifies the total duration that the node should delay the shutdown and total grace period for pod termination during a node shutdown.
 	// Defaults to 0 seconds.
 	// +featureGate=GracefulNodeShutdown
@@ -438,7 +463,7 @@ type KubeletConfiguration struct {
 	// Decreasing this factor will set lower high limit for container cgroups and put heavier reclaim pressure
 	// while increasing will put less reclaim pressure.
 	// See https://kep.k8s.io/2570 for more details.
-	// Default: 0.8
+	// Default: 0.9
 	// +featureGate=MemoryQoS
 	// +optional
 	MemoryThrottlingFactor *float64
@@ -450,6 +475,7 @@ type KubeletConfiguration struct {
 	// registerNode enables automatic registration with the apiserver.
 	// +optional
 	RegisterNode bool
+
 	// Tracing specifies the versioned configuration for OpenTelemetry tracing clients.
 	// See https://kep.k8s.io/2832 for more details.
 	// +featureGate=KubeletTracing
@@ -465,6 +491,29 @@ type KubeletConfiguration struct {
 	// disabled. Once disabled, user should not set request/limit for container's ephemeral storage, or sizeLimit for emptyDir.
 	// +optional
 	LocalStorageCapacityIsolation bool
+
+	// ContainerRuntimeEndpoint is the endpoint of container runtime.
+	// unix domain sockets supported on Linux while npipes and tcp endpoints are supported for windows.
+	// Examples:'unix:///path/to/runtime.sock', 'npipe:////./pipe/runtime'
+	ContainerRuntimeEndpoint string
+
+	// ImageServiceEndpoint is the endpoint of container image service.
+	// If not specified the default value is ContainerRuntimeEndpoint
+	// +optional
+	ImageServiceEndpoint string
+
+	// FailCgroupV1 prevents the kubelet from starting on hosts
+	// that use cgroup v1. By default, this is set to 'false', meaning
+	// the kubelet is allowed to start on cgroup v1 hosts unless this
+	// option is explicitly enabled.
+	// +optional
+	FailCgroupV1 bool
+
+	// CrashLoopBackOff contains config to modify node-level parameters for
+	// container restart behavior
+	// +featureGate=KubeletCrashLoopBackoffMax
+	// +optional
+	CrashLoopBackOff CrashLoopBackOffConfig
 }
 
 // KubeletAuthorizationMode denotes the authorization mode for the kubelet
@@ -637,9 +686,19 @@ type ShutdownGracePeriodByPodPriority struct {
 
 type MemorySwapConfiguration struct {
 	// swapBehavior configures swap memory available to container workloads. May be one of
-	// "", "LimitedSwap": workload combined memory and swap usage cannot exceed pod memory limit
-	// "UnlimitedSwap": workloads can use unlimited swap, up to the allocatable limit.
+	// "", "NoSwap": workloads can not use swap, default option.
+	// "LimitedSwap": workload swap usage is limited. The swap limit is proportionate to the container's memory request.
 	// +featureGate=NodeSwap
 	// +optional
 	SwapBehavior string
+}
+
+// CrashLoopBackOffConfig is used for setting configuration for this kubelet's
+// container restart behavior
+type CrashLoopBackOffConfig struct {
+	// MaxContainerRestartPeriod is the maximum duration the backoff delay can accrue
+	// to for container restarts, minimum 1 second, maximum 300 seconds.
+	// +featureGate=KubeletCrashLoopBackOffMax
+	// +optional
+	MaxContainerRestartPeriod *metav1.Duration
 }

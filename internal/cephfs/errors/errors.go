@@ -46,9 +46,6 @@ var (
 	// statically provisioned.
 	ErrNonStaticVolume = coreError.New("volume not static")
 
-	// ErrSnapProtectionExist is returned when the snapshot is already protected.
-	ErrSnapProtectionExist = coreError.New("snapshot  protection already exists")
-
 	// ErrSnapNotFound is returned when snap name passed is not found in the list
 	// of snapshots for the given image.
 	ErrSnapNotFound = coreError.New("snapshot not found")
@@ -61,6 +58,12 @@ var (
 
 	// ErrVolumeHasSnapshots is returned when a subvolume has snapshots.
 	ErrVolumeHasSnapshots = coreError.New("volume has snapshots")
+
+	// ErrQuiesceInProgress is returned when quiesce operation is in progress.
+	ErrQuiesceInProgress = coreError.New("quiesce operation is in progress")
+
+	// ErrGroupNotFound is returned when volume group snapshot is not found in the backend.
+	ErrGroupNotFound = coreError.New("volume group snapshot not found")
 )
 
 // IsCloneRetryError returns true if the clone error is pending,in-progress

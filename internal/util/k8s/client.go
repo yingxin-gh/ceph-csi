@@ -20,13 +20,20 @@ import (
 	"fmt"
 	"os"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+var kubeclient *kubernetes.Clientset
+
 // NewK8sClient create kubernetes client.
 func NewK8sClient() (*kubernetes.Clientset, error) {
+	if kubeclient != nil {
+		return kubeclient, nil
+	}
+
 	var cfg *rest.Config
 	var err error
 	cPath := os.Getenv("KUBERNETES_CONFIG_PATH")
@@ -41,10 +48,21 @@ func NewK8sClient() (*kubernetes.Clientset, error) {
 			return nil, fmt.Errorf("failed to get cluster config: %w", err)
 		}
 	}
+	cfg.ContentType = runtime.ContentTypeProtobuf
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 
+	kubeclient = client
+
 	return client, nil
+}
+
+// RunsOnKubernetes checks if the application is running within a Kubernetes cluster
+// by inspecting the presence of the KUBERNETES_SERVICE_HOST environment variable.
+func RunsOnKubernetes() bool {
+	kubernetesServiceHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+
+	return kubernetesServiceHost != ""
 }

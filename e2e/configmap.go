@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ceph/ceph-csi/internal/util"
+	cephcsi "github.com/ceph/ceph-csi/api/deploy/kubernetes"
 
 	v1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
@@ -54,14 +54,21 @@ func createConfigMap(pluginPath string, c kubernetes.Interface, f *framework.Fra
 	if err != nil {
 		return err
 	}
-	conmap := []util.ClusterInfo{{
+	conmap := []cephcsi.ClusterInfo{{
 		ClusterID: fsID,
 		Monitors:  mons,
-		RBD: struct {
-			NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-			RadosNamespace       string `json:"radosNamespace"`
-		}{
+		RBD: cephcsi.RBD{
 			RadosNamespace: radosNamespace,
+		},
+		CephFS: cephcsi.CephFS{
+			RadosNamespace: radosNamespace,
+		},
+		ReadAffinity: cephcsi.ReadAffinity{
+			Enabled: true,
+			CrushLocationLabels: []string{
+				crushLocationRegionLabel,
+				crushLocationZoneLabel,
+			},
 		},
 	}}
 	if upgradeTesting {
@@ -113,7 +120,7 @@ func createCustomConfigMap(
 	for key := range clusterInfo {
 		clusterID = append(clusterID, key)
 	}
-	conmap := make([]util.ClusterInfo, len(clusterID))
+	conmap := make([]cephcsi.ClusterInfo, len(clusterID))
 
 	for i, j := range clusterID {
 		conmap[i].ClusterID = j

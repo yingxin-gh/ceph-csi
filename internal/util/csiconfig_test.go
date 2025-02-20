@@ -17,9 +17,14 @@ limitations under the License.
 package util
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
+
+	cephcsi "github.com/ceph/ceph-csi/api/deploy/kubernetes"
+
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -164,24 +169,18 @@ func TestGetRBDNetNamespaceFilePath(t *testing.T) {
 		},
 	}
 
-	csiConfig := []ClusterInfo{
+	csiConfig := []cephcsi.ClusterInfo{
 		{
 			ClusterID: "cluster-1",
 			Monitors:  []string{"ip-1", "ip-2"},
-			RBD: struct {
-				NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-				RadosNamespace       string `json:"radosNamespace"`
-			}{
+			RBD: cephcsi.RBD{
 				NetNamespaceFilePath: "/var/lib/kubelet/plugins/rbd.ceph.csi.com/cluster1-net",
 			},
 		},
 		{
 			ClusterID: "cluster-2",
 			Monitors:  []string{"ip-3", "ip-4"},
-			RBD: struct {
-				NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-				RadosNamespace       string `json:"radosNamespace"`
-			}{
+			RBD: cephcsi.RBD{
 				NetNamespaceFilePath: "/var/lib/kubelet/plugins/rbd.ceph.csi.com/cluster2-net",
 			},
 		},
@@ -200,17 +199,16 @@ func TestGetRBDNetNamespaceFilePath(t *testing.T) {
 		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := GetRBDNetNamespaceFilePath(tmpConfPath, ts.clusterID)
+			got, err := GetRBDNetNamespaceFilePath(tmpConfPath, tt.clusterID)
 			if err != nil {
 				t.Errorf("GetRBDNetNamespaceFilePath() error = %v", err)
 
 				return
 			}
-			if got != ts.want {
-				t.Errorf("GetRBDNetNamespaceFilePath() = %v, want %v", got, ts.want)
+			if got != tt.want {
+				t.Errorf("GetRBDNetNamespaceFilePath() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -240,24 +238,18 @@ func TestGetCephFSNetNamespaceFilePath(t *testing.T) {
 		},
 	}
 
-	csiConfig := []ClusterInfo{
+	csiConfig := []cephcsi.ClusterInfo{
 		{
 			ClusterID: "cluster-1",
 			Monitors:  []string{"ip-1", "ip-2"},
-			CephFS: struct {
-				NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-				SubvolumeGroup       string `json:"subvolumeGroup"`
-			}{
+			CephFS: cephcsi.CephFS{
 				NetNamespaceFilePath: "/var/lib/kubelet/plugins/cephfs.ceph.csi.com/cluster1-net",
 			},
 		},
 		{
 			ClusterID: "cluster-2",
 			Monitors:  []string{"ip-3", "ip-4"},
-			CephFS: struct {
-				NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-				SubvolumeGroup       string `json:"subvolumeGroup"`
-			}{
+			CephFS: cephcsi.CephFS{
 				NetNamespaceFilePath: "/var/lib/kubelet/plugins/cephfs.ceph.csi.com/cluster2-net",
 			},
 		},
@@ -276,17 +268,16 @@ func TestGetCephFSNetNamespaceFilePath(t *testing.T) {
 		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := GetCephFSNetNamespaceFilePath(tmpConfPath, ts.clusterID)
+			got, err := GetCephFSNetNamespaceFilePath(tmpConfPath, tt.clusterID)
 			if err != nil {
 				t.Errorf("GetCephFSNetNamespaceFilePath() error = %v", err)
 
 				return
 			}
-			if got != ts.want {
-				t.Errorf("GetCephFSNetNamespaceFilePath() = %v, want %v", got, ts.want)
+			if got != tt.want {
+				t.Errorf("GetCephFSNetNamespaceFilePath() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -316,22 +307,18 @@ func TestGetNFSNetNamespaceFilePath(t *testing.T) {
 		},
 	}
 
-	csiConfig := []ClusterInfo{
+	csiConfig := []cephcsi.ClusterInfo{
 		{
 			ClusterID: "cluster-1",
 			Monitors:  []string{"ip-1", "ip-2"},
-			NFS: struct {
-				NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-			}{
+			NFS: cephcsi.NFS{
 				NetNamespaceFilePath: "/var/lib/kubelet/plugins/nfs.ceph.csi.com/cluster1-net",
 			},
 		},
 		{
 			ClusterID: "cluster-2",
 			Monitors:  []string{"ip-3", "ip-4"},
-			NFS: struct {
-				NetNamespaceFilePath string `json:"netNamespaceFilePath"`
-			}{
+			NFS: cephcsi.NFS{
 				NetNamespaceFilePath: "/var/lib/kubelet/plugins/nfs.ceph.csi.com/cluster2-net",
 			},
 		},
@@ -350,18 +337,278 @@ func TestGetNFSNetNamespaceFilePath(t *testing.T) {
 		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := GetNFSNetNamespaceFilePath(tmpConfPath, ts.clusterID)
+			got, err := GetNFSNetNamespaceFilePath(tmpConfPath, tt.clusterID)
 			if err != nil {
 				t.Errorf("GetNFSNetNamespaceFilePath() error = %v", err)
 
 				return
 			}
-			if got != ts.want {
-				t.Errorf("GetNFSNetNamespaceFilePath() = %v, want %v", got, ts.want)
+			if got != tt.want {
+				t.Errorf("GetNFSNetNamespaceFilePath() = %v, want %v", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestGetReadAffinityOptions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		clusterID string
+		want      struct {
+			enabled bool
+			labels  string
+		}
+	}{
+		{
+			name:      "ReadAffinity enabled set to true for cluster-1",
+			clusterID: "cluster-1",
+			want: struct {
+				enabled bool
+				labels  string
+			}{true, "topology.kubernetes.io/region,topology.kubernetes.io/zone,topology.io/rack"},
+		},
+		{
+			name:      "ReadAffinity enabled set to true for cluster-2",
+			clusterID: "cluster-2",
+			want: struct {
+				enabled bool
+				labels  string
+			}{true, "topology.kubernetes.io/region"},
+		},
+		{
+			name:      "ReadAffinity enabled set to false for cluster-3",
+			clusterID: "cluster-3",
+			want: struct {
+				enabled bool
+				labels  string
+			}{false, ""},
+		},
+		{
+			name:      "ReadAffinity option not set in cluster-4",
+			clusterID: "cluster-4",
+			want: struct {
+				enabled bool
+				labels  string
+			}{false, ""},
+		},
+	}
+
+	csiConfig := []cephcsi.ClusterInfo{
+		{
+			ClusterID: "cluster-1",
+			ReadAffinity: cephcsi.ReadAffinity{
+				Enabled: true,
+				CrushLocationLabels: []string{
+					"topology.kubernetes.io/region",
+					"topology.kubernetes.io/zone",
+					"topology.io/rack",
+				},
+			},
+		},
+		{
+			ClusterID: "cluster-2",
+			ReadAffinity: cephcsi.ReadAffinity{
+				Enabled: true,
+				CrushLocationLabels: []string{
+					"topology.kubernetes.io/region",
+				},
+			},
+		},
+		{
+			ClusterID: "cluster-3",
+			ReadAffinity: cephcsi.ReadAffinity{
+				Enabled: false,
+				CrushLocationLabels: []string{
+					"topology.io/rack",
+				},
+			},
+		},
+		{
+			ClusterID: "cluster-4",
+		},
+	}
+	csiConfigFileContent, err := json.Marshal(csiConfig)
+	if err != nil {
+		t.Errorf("failed to marshal csi config info %v", err)
+	}
+	tmpConfPath := t.TempDir() + "/ceph-csi.json"
+	err = os.WriteFile(tmpConfPath, csiConfigFileContent, 0o600)
+	if err != nil {
+		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			enabled, labels, err := GetCrushLocationLabels(tmpConfPath, tt.clusterID)
+			if err != nil {
+				t.Errorf("GetCrushLocationLabels() error = %v", err)
+
+				return
+			}
+			if enabled != tt.want.enabled || labels != tt.want.labels {
+				t.Errorf("GetCrushLocationLabels() = {%v %v} want %v", enabled, labels, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetCephFSMountOptions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                 string
+		clusterID            string
+		wantKernelMntOptions string
+		wantFuseMntOptions   string
+	}{
+		{
+			name:                 "cluster-1 with non-empty mount options",
+			clusterID:            "cluster-1",
+			wantKernelMntOptions: "crc",
+			wantFuseMntOptions:   "ro",
+		},
+		{
+			name:                 "cluster-2 with empty mount options",
+			clusterID:            "cluster-2",
+			wantKernelMntOptions: "",
+			wantFuseMntOptions:   "",
+		},
+		{
+			name:                 "cluster-3 with no mount options",
+			clusterID:            "cluster-3",
+			wantKernelMntOptions: "",
+			wantFuseMntOptions:   "",
+		},
+	}
+
+	csiConfig := []cephcsi.ClusterInfo{
+		{
+			ClusterID: "cluster-1",
+			CephFS: cephcsi.CephFS{
+				KernelMountOptions: "crc",
+				FuseMountOptions:   "ro",
+			},
+		},
+		{
+			ClusterID: "cluster-2",
+			CephFS: cephcsi.CephFS{
+				KernelMountOptions: "",
+				FuseMountOptions:   "",
+			},
+		},
+		{
+			ClusterID: "cluster-3",
+			CephFS:    cephcsi.CephFS{},
+		},
+	}
+	csiConfigFileContent, err := json.Marshal(csiConfig)
+	if err != nil {
+		t.Errorf("failed to marshal csi config info %v", err)
+	}
+	tmpConfPath := t.TempDir() + "/ceph-csi.json"
+	err = os.WriteFile(tmpConfPath, csiConfigFileContent, 0o600)
+	if err != nil {
+		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			kernelMntOptions, fuseMntOptions, err := GetCephFSMountOptions(tmpConfPath, tt.clusterID)
+			if err != nil {
+				t.Errorf("GetCephFSMountOptions() error = %v", err)
+			}
+			if kernelMntOptions != tt.wantKernelMntOptions || fuseMntOptions != tt.wantFuseMntOptions {
+				t.Errorf("GetCephFSMountOptions() = (%v, %v), want (%v, %v)",
+					kernelMntOptions, fuseMntOptions, tt.wantKernelMntOptions, tt.wantFuseMntOptions,
+				)
+			}
+		})
+	}
+}
+
+func TestGetRBDMirrorDaemonCount(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		clusterID string
+		want      int
+	}{
+		{
+			name:      "get rbd mirror daemon count for cluster-1",
+			clusterID: "cluster-1",
+			want:      2,
+		},
+		{
+			name:      "get rbd mirror daemon count for cluster-2",
+			clusterID: "cluster-2",
+			want:      4,
+		},
+		{
+			name:      "when rbd mirror daemon count is empty",
+			clusterID: "cluster-3",
+			want:      1, // default mirror daemon count
+		},
+	}
+
+	csiConfig := []cephcsi.ClusterInfo{
+		{
+			ClusterID: "cluster-1",
+			Monitors:  []string{"ip-1", "ip-2"},
+			RBD: cephcsi.RBD{
+				MirrorDaemonCount: 2,
+			},
+		},
+		{
+			ClusterID: "cluster-2",
+			Monitors:  []string{"ip-3", "ip-4"},
+			RBD: cephcsi.RBD{
+				MirrorDaemonCount: 4,
+			},
+		},
+		{
+			ClusterID: "cluster-3",
+			Monitors:  []string{"ip-5", "ip-6"},
+		},
+	}
+	csiConfigFileContent, err := json.Marshal(csiConfig)
+	if err != nil {
+		t.Errorf("failed to marshal csi config info %v", err)
+	}
+	tmpConfPath := t.TempDir() + "/ceph-csi.json"
+	err = os.WriteFile(tmpConfPath, csiConfigFileContent, 0o600)
+	if err != nil {
+		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var got int
+			got, err = GetRBDMirrorDaemonCount(tmpConfPath, tt.clusterID)
+			if err != nil {
+				t.Errorf("GetRBDMirrorDaemonCount() error = %v", err)
+
+				return
+			}
+			if got != tt.want {
+				t.Errorf("GetRBDMirrorDaemonCount() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// when mirrorDaemonCount is set as string
+	csiConfigFileContent = bytes.Replace(
+		csiConfigFileContent,
+		[]byte(`"mirrorDaemonCount":2`),
+		[]byte(`"mirrorDaemonCount":"2"`),
+		1)
+	tmpCSIConfPath := t.TempDir() + "/ceph-csi.json"
+	err = os.WriteFile(tmpCSIConfPath, csiConfigFileContent, 0o600)
+	if err != nil {
+		t.Errorf("failed to write %s file content: %v", CsiConfigFile, err)
+	}
+	_, err = GetRBDMirrorDaemonCount(tmpCSIConfPath, "test")
+	require.Error(t, err)
 }

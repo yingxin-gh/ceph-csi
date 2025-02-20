@@ -32,8 +32,8 @@ type FenceControllerServer struct {
 	*fence.UnimplementedFenceControllerServer
 }
 
-// NewFenceControllerServer creates a new IdentityServer which handles
-// the Identity Service requests from the CSI-Addons specification.
+// NewFenceControllerServer creates a new FenceControllerServer which handles
+// the FenceController Service requests from the CSI-Addons specification.
 func NewFenceControllerServer() *FenceControllerServer {
 	return &FenceControllerServer{}
 }
@@ -62,7 +62,7 @@ func (fcs *FenceControllerServer) FenceClusterNetwork(
 	ctx context.Context,
 	req *fence.FenceClusterNetworkRequest,
 ) (*fence.FenceClusterNetworkResponse, error) {
-	err := validateNetworkFenceReq(req.GetCidrs(), req.Parameters)
+	err := validateNetworkFenceReq(req.GetCidrs(), req.GetParameters())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -73,7 +73,7 @@ func (fcs *FenceControllerServer) FenceClusterNetwork(
 	}
 	defer cr.DeleteCredentials()
 
-	nwFence, err := nf.NewNetworkFence(ctx, cr, req.Cidrs, req.GetParameters())
+	nwFence, err := nf.NewNetworkFence(ctx, cr, req.GetCidrs(), req.GetParameters())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -91,7 +91,7 @@ func (fcs *FenceControllerServer) UnfenceClusterNetwork(
 	ctx context.Context,
 	req *fence.UnfenceClusterNetworkRequest,
 ) (*fence.UnfenceClusterNetworkResponse, error) {
-	err := validateNetworkFenceReq(req.GetCidrs(), req.Parameters)
+	err := validateNetworkFenceReq(req.GetCidrs(), req.GetParameters())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -102,7 +102,7 @@ func (fcs *FenceControllerServer) UnfenceClusterNetwork(
 	}
 	defer cr.DeleteCredentials()
 
-	nwFence, err := nf.NewNetworkFence(ctx, cr, req.Cidrs, req.GetParameters())
+	nwFence, err := nf.NewNetworkFence(ctx, cr, req.GetCidrs(), req.GetParameters())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -113,4 +113,70 @@ func (fcs *FenceControllerServer) UnfenceClusterNetwork(
 	}
 
 	return &fence.UnfenceClusterNetworkResponse{}, nil
+}
+
+// GetFenceClients fetches the ceph cluster ID and the client address that need to be fenced.
+func (fcs *FenceControllerServer) GetFenceClients(
+	ctx context.Context,
+	req *fence.GetFenceClientsRequest,
+) (*fence.GetFenceClientsResponse, error) {
+	options := req.GetParameters()
+	clusterID, err := util.GetClusterID(options)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	cr, err := util.NewUserCredentials(req.GetSecrets())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	defer cr.DeleteCredentials()
+
+	monitors, _ /* clusterID*/, err := util.GetMonsAndClusterID(ctx, clusterID, false)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// Get the cluster ID of the ceph cluster.
+	conn := &util.ClusterConnection{}
+	err = conn.Connect(monitors, cr)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to connect to MONs %q: %s", monitors, err)
+	}
+	defer conn.Destroy()
+
+	fsID, err := conn.GetFSID()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get cephfs id: %s", err)
+	}
+
+	address, err := conn.GetAddrs()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get client address: %s", err)
+	}
+
+	// The example address we get is 10.244.0.1:0/2686266785 from
+	// which we need to extract the IP address.
+	addr, err := nf.ParseClientIP(address)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse client address: %s", err)
+	}
+
+	// adding /32 to the IP address to make it a CIDR block.
+	addr += "/32"
+
+	resp := &fence.GetFenceClientsResponse{
+		Clients: []*fence.ClientDetails{
+			{
+				Id: fsID,
+				Addresses: []*fence.CIDR{
+					{
+						Cidr: addr,
+					},
+				},
+			},
+		},
+	}
+
+	return resp, nil
 }

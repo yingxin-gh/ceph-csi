@@ -1,64 +1,87 @@
 ---
-defaults:
-  actions:
-    queue:
-      # merge_bot_account: ceph-csi-bot #mergify[bot] will be merging prs.
-      # update_bot_account: ceph-csi-bot #mergify will randomly pick and use
-      # credentials of users with write access to repo to rebase prs.
-      name: default
-      method: rebase
-      update_method: rebase
-      # For rebasing Mergify uses the author of the PR. Ideally we use the
-      # ceph-csi-bot for that, but this is a feature that needs a paid
-      # subscription.
-      #
-      # rebase:
-      # Use ceph-csi-bot for rebasing, not the account of the PR owner.
-      # bot_account: ceph-csi-bot
-
 queue_rules:
   - name: default
-    conditions:
+    merge_conditions:
       # Conditions to get out of the queue (= merged)
       - or:
           - and:
-              - base~=^(devel)|(release-.+)$
+              - base~=^(release-.+)$
               - "status-success=codespell"
               - "status-success=multi-arch-build"
               - "status-success=go-test"
               - "status-success=golangci-lint"
               - "status-success=mod-check"
               - "status-success=lint-extras"
-              - "status-success=ci/centos/k8s-e2e-external-storage/1.24"
-              - "status-success=ci/centos/k8s-e2e-external-storage/1.25"
-              - "status-success=ci/centos/k8s-e2e-external-storage/1.26"
-              - "status-success=ci/centos/k8s-e2e-external-storage/1.27"
-              - "status-success=ci/centos/mini-e2e-helm/k8s-1.24"
-              - "status-success=ci/centos/mini-e2e-helm/k8s-1.25"
-              - "status-success=ci/centos/mini-e2e-helm/k8s-1.26"
-              - "status-success=ci/centos/mini-e2e-helm/k8s-1.27"
-              - "status-success=ci/centos/mini-e2e/k8s-1.24"
-              - "status-success=ci/centos/mini-e2e/k8s-1.25"
-              - "status-success=ci/centos/mini-e2e/k8s-1.26"
-              - "status-success=ci/centos/mini-e2e/k8s-1.27"
+              - "status-success=uncommitted-code-check"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.29"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+          - and:
+              - base=release-v3.12
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.29"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+          - and:
+              - base=devel
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "status-success=uncommitted-code-check"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.32"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.32"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.32"
               - "status-success=ci/centos/upgrade-tests-cephfs"
               - "status-success=ci/centos/upgrade-tests-rbd"
           - and:
               - base=ci/centos
               - "status-success=ci/centos/job-validation"
               - "status-success=ci/centos/jjb-validate"
+    merge_method: rebase
+    update_method: rebase
 
 pull_request_rules:
   - name: start CI jobs for PRs in the merge queue
     conditions:
       - base~=^(devel)|(release-.+)$
+      - label!=conflicts
       - not:
           check-pending~=^ci/centos
       - not:
           status-success~=^ci/centos
       - or:
           - "check-pending=Queue: Embarked in merge train"
-          - author=mergify
+          - author=mergify[bot]
     actions:
       label:
         add:
@@ -78,16 +101,14 @@ pull_request_rules:
       - author!=dependabot[bot]
     actions:
       comment:
-        # yamllint disable-line rule:truthy
-        message: "This pull request now has conflicts with the target branch.
-        Could you please resolve conflicts and force push the corrected
-        changes? 🙏"
+        # yamllint disable-line rule:truthy rule:line-length
+        message: "This pull request now has conflicts with the target branch. Could you please resolve conflicts and force push the corrected changes? 🙏"
 
   - name: update dependencies by dependabot (skip commitlint)
     conditions:
       - author=dependabot[bot]
       - label!=DNM
-      - base~=^(devel)|(release-.+)$
+      - base=devel
       - "#approved-reviews-by>=2"
       - "#changes-requested-reviews-by=0"
       - "approved-reviews-by=@ceph/ceph-csi-contributors"
@@ -98,18 +119,15 @@ pull_request_rules:
       - "status-success=golangci-lint"
       - "status-success=mod-check"
       - "status-success=lint-extras"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.24"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.25"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.26"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.27"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.24"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.25"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.26"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.27"
-      - "status-success=ci/centos/mini-e2e/k8s-1.24"
-      - "status-success=ci/centos/mini-e2e/k8s-1.25"
-      - "status-success=ci/centos/mini-e2e/k8s-1.26"
-      - "status-success=ci/centos/mini-e2e/k8s-1.27"
+      - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+      - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+      - "status-success=ci/centos/k8s-e2e-external-storage/1.32"
+      - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+      - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+      - "status-success=ci/centos/mini-e2e-helm/k8s-1.32"
+      - "status-success=ci/centos/mini-e2e/k8s-1.30"
+      - "status-success=ci/centos/mini-e2e/k8s-1.31"
+      - "status-success=ci/centos/mini-e2e/k8s-1.32"
       - "status-success=ci/centos/upgrade-tests-cephfs"
       - "status-success=ci/centos/upgrade-tests-rbd"
       - "status-success=DCO"
@@ -127,34 +145,86 @@ pull_request_rules:
 
   - name: automatic merge
     conditions:
-      - label!=DNM
-      - base~=^(devel)|(release-.+)$
-      - "#approved-reviews-by>=2"
-      - "#changes-requested-reviews-by=0"
-      - "approved-reviews-by=@ceph/ceph-csi-contributors"
-      - "approved-reviews-by=@ceph/ceph-csi-maintainers"
-      - "status-success=codespell"
-      - "status-success=multi-arch-build"
-      - "status-success=go-test"
-      - "status-success=golangci-lint"
-      - "status-success=commitlint"
-      - "status-success=mod-check"
-      - "status-success=lint-extras"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.24"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.25"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.26"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.27"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.24"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.25"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.26"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.27"
-      - "status-success=ci/centos/mini-e2e/k8s-1.24"
-      - "status-success=ci/centos/mini-e2e/k8s-1.25"
-      - "status-success=ci/centos/mini-e2e/k8s-1.26"
-      - "status-success=ci/centos/mini-e2e/k8s-1.27"
-      - "status-success=ci/centos/upgrade-tests-cephfs"
-      - "status-success=ci/centos/upgrade-tests-rbd"
-      - "status-success=DCO"
+      - or:
+          - and:
+              - label!=DNM
+              - base~=^(release-.+)$
+              - "#approved-reviews-by>=2"
+              - "#changes-requested-reviews-by=0"
+              - "approved-reviews-by=@ceph/ceph-csi-contributors"
+              - "approved-reviews-by=@ceph/ceph-csi-maintainers"
+              - "status-success=DCO"
+              - "status-success=codespell"
+              - "status-success=commitlint"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=lint-extras"
+              - "status-success=mod-check"
+              - "status-success=multi-arch-build"
+              - "status-success=uncommitted-code-check"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.29"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+          - and:
+              - label!=DNM
+              - base=release-v3.12
+              - "#approved-reviews-by>=2"
+              - "#changes-requested-reviews-by=0"
+              - "approved-reviews-by=@ceph/ceph-csi-contributors"
+              - "approved-reviews-by=@ceph/ceph-csi-maintainers"
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=commitlint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.29"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+              - "status-success=DCO"
+          - and:
+              - label!=DNM
+              - base=devel
+              - "#approved-reviews-by>=2"
+              - "#changes-requested-reviews-by=0"
+              - "approved-reviews-by=@ceph/ceph-csi-contributors"
+              - "approved-reviews-by=@ceph/ceph-csi-maintainers"
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=commitlint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.32"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.32"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.32"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+              - "status-success=DCO"
     actions:
       queue:
         name: default
@@ -162,55 +232,80 @@ pull_request_rules:
 
   - name: automatic merge PR having ready-to-merge label
     conditions:
-      - label!=DNM
-      - label=ready-to-merge
-      - base~=^(devel)|(release-.+)$
-      - "approved-reviews-by=@ceph/ceph-csi-maintainers"
-      - "status-success=codespell"
-      - "status-success=multi-arch-build"
-      - "status-success=go-test"
-      - "status-success=golangci-lint"
-      - "status-success=commitlint"
-      - "status-success=mod-check"
-      - "status-success=lint-extras"
-      - "#changes-requested-reviews-by=0"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.24"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.25"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.26"
-      - "status-success=ci/centos/k8s-e2e-external-storage/1.27"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.24"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.25"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.26"
-      - "status-success=ci/centos/mini-e2e-helm/k8s-1.27"
-      - "status-success=ci/centos/mini-e2e/k8s-1.24"
-      - "status-success=ci/centos/mini-e2e/k8s-1.25"
-      - "status-success=ci/centos/mini-e2e/k8s-1.26"
-      - "status-success=ci/centos/mini-e2e/k8s-1.27"
-      - "status-success=ci/centos/upgrade-tests-cephfs"
-      - "status-success=ci/centos/upgrade-tests-rbd"
-      - "status-success=DCO"
+      - or:
+          - and:
+              - base~=^(release-.+)$
+              - label!=DNM
+              - label=ready-to-merge
+              - "approved-reviews-by=@ceph/ceph-csi-maintainers"
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=commitlint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "#changes-requested-reviews-by=0"
+              - "status-success=uncommitted-code-check"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.29"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+              - "status-success=DCO"
+          - and:
+              - base=release-v3.12
+              - label!=DNM
+              - label=ready-to-merge
+              - "approved-reviews-by=@ceph/ceph-csi-maintainers"
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=commitlint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "#changes-requested-reviews-by=0"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.29"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.30"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.31"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.31"
+              - "status-success=ci/centos/mini-e2e/k8s-1.29"
+              - "status-success=ci/centos/mini-e2e/k8s-1.30"
+              - "status-success=ci/centos/mini-e2e/k8s-1.31"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+              - "status-success=DCO"
     actions:
       queue:
         name: default
       delete_head_branch: {}
 
-  - name: backport patches to release-v3.7 branch
+  - name: backport patches to release-v3.12 branch
     conditions:
       - base=devel
-      - label=backport-to-release-v3.7
+      - label=backport-to-release-v3.12
     actions:
       backport:
         branches:
-          - release-v3.7
+          - release-v3.12
 
-  - name: backport patches to release-v3.8 branch
+  - name: backport patches to release-v3.13 branch
     conditions:
       - base=devel
-      - label=backport-to-release-v3.8
+      - label=backport-to-release-v3.13
     actions:
       backport:
         branches:
-          - release-v3.8
+          - release-v3.13
 
   - name: remove outdated approvals on ci/centos
     conditions:
@@ -342,3 +437,16 @@ pull_request_rules:
           - Repo activity
           - ci/skip/e2e
           - ci/skip/multi-arch-build
+
+  # A [skip ci] in the PR description prevents Jenkins jobs from running, mark
+  # the PR as Draft so that CI jobs do not automatically run anymore.
+  - name: detect [skip ci] in the PR description
+    conditions:
+      # this should be \[skip\W+ci\], but Mergify does not accept that
+      - "body-raw~=skip ci"
+    actions:
+      edit:
+        draft: true
+      comment:
+        # yamllint disable-line rule:truthy rule:line-length
+        message: "The PR description contains the unsupported `[skip ci]` command, please update the description and mark the PR ready for review again."

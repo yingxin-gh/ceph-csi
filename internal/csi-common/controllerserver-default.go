@@ -28,39 +28,9 @@ import (
 
 // DefaultControllerServer points to default driver.
 type DefaultControllerServer struct {
+	csi.UnimplementedControllerServer
+	csi.UnimplementedGroupControllerServer
 	Driver *CSIDriver
-}
-
-// ControllerPublishVolume publish volume on node.
-func (cs *DefaultControllerServer) ControllerPublishVolume(
-	ctx context.Context,
-	req *csi.ControllerPublishVolumeRequest,
-) (*csi.ControllerPublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
-
-// ControllerUnpublishVolume unpublish on node.
-func (cs *DefaultControllerServer) ControllerUnpublishVolume(
-	ctx context.Context,
-	req *csi.ControllerUnpublishVolumeRequest,
-) (*csi.ControllerUnpublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
-
-// ListVolumes lists volumes.
-func (cs *DefaultControllerServer) ListVolumes(
-	ctx context.Context,
-	req *csi.ListVolumesRequest,
-) (*csi.ListVolumesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
-
-// GetCapacity get volume capacity.
-func (cs *DefaultControllerServer) GetCapacity(
-	ctx context.Context,
-	req *csi.GetCapacityRequest,
-) (*csi.GetCapacityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
 }
 
 // ControllerGetCapabilities implements the default GRPC callout.
@@ -79,18 +49,18 @@ func (cs *DefaultControllerServer) ControllerGetCapabilities(
 	}, nil
 }
 
-// ListSnapshots lists snapshots.
-func (cs *DefaultControllerServer) ListSnapshots(
+// GroupControllerGetCapabilities implements the default
+// GroupControllerGetCapabilities GRPC callout.
+func (cs *DefaultControllerServer) GroupControllerGetCapabilities(
 	ctx context.Context,
-	req *csi.ListSnapshotsRequest,
-) (*csi.ListSnapshotsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
+	req *csi.GroupControllerGetCapabilitiesRequest,
+) (*csi.GroupControllerGetCapabilitiesResponse, error) {
+	log.TraceLog(ctx, "Using default GroupControllerGetCapabilities")
+	if cs.Driver == nil {
+		return nil, status.Error(codes.Unimplemented, "Group controller server is not enabled")
+	}
 
-// ControllerGetVolume fetch volume information.
-func (cs *DefaultControllerServer) ControllerGetVolume(
-	ctx context.Context,
-	req *csi.ControllerGetVolumeRequest,
-) (*csi.ControllerGetVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+	return &csi.GroupControllerGetCapabilitiesResponse{
+		Capabilities: cs.Driver.groupCapabilities,
+	}, nil
 }

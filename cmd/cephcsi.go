@@ -26,6 +26,7 @@ import (
 	"github.com/ceph/ceph-csi/internal/cephfs"
 	"github.com/ceph/ceph-csi/internal/controller"
 	"github.com/ceph/ceph-csi/internal/controller/persistentvolume"
+	"github.com/ceph/ceph-csi/internal/controller/volumegroup"
 	"github.com/ceph/ceph-csi/internal/liveness"
 	nfsdriver "github.com/ceph/ceph-csi/internal/nfs/driver"
 	rbddriver "github.com/ceph/ceph-csi/internal/rbd/driver"
@@ -70,8 +71,8 @@ func init() {
 	flag.StringVar(&conf.StagingPath, "stagingpath", defaultStagingPath, "staging path")
 	flag.StringVar(&conf.ClusterName, "clustername", "", "name of the cluster")
 	flag.BoolVar(&conf.SetMetadata, "setmetadata", false, "set metadata on the volume")
-	flag.StringVar(&conf.InstanceID, "instanceid", "", "Unique ID distinguishing this instance of Ceph CSI among other"+
-		" instances, when sharing Ceph clusters across CSI instances for provisioning")
+	flag.StringVar(&conf.InstanceID, "instanceid", "default", "Unique ID distinguishing this instance of Ceph-CSI"+
+		" among other instances, when sharing Ceph clusters across CSI instances for provisioning")
 	flag.IntVar(&conf.PidLimit, "pidlimit", 0, "the PID limit to configure through cgroups")
 	flag.BoolVar(&conf.IsControllerServer, "controllerserver", false, "start cephcsi controller server")
 	flag.BoolVar(&conf.IsNodeServer, "nodeserver", false, "start cephcsi node server")
@@ -101,13 +102,18 @@ func init() {
 		"",
 		"Comma separated string of mount options accepted by cephfs kernel mounter")
 	flag.StringVar(
+		&conf.RadosNamespaceCephFS,
+		"radosnamespacecephfs",
+		"",
+		"CephFS RadosNamespace used to store CSI specific objects and keys.")
+	flag.StringVar(
 		&conf.FuseMountOptions,
 		"fusemountoptions",
 		"",
 		"Comma separated string of mount options accepted by ceph-fuse mounter")
 
-	// liveness/grpc metrics related flags
-	flag.IntVar(&conf.MetricsPort, "metricsport", 8080, "TCP port for liveness/grpc metrics requests")
+	// liveness/profile metrics related flags
+	flag.IntVar(&conf.MetricsPort, "metricsport", 8080, "TCP port for liveness/profile metrics requests")
 	flag.StringVar(
 		&conf.MetricsPath,
 		"metricspath",
@@ -115,14 +121,11 @@ func init() {
 		"path of prometheus endpoint where metrics will be available")
 	flag.DurationVar(&conf.PollTime, "polltime", time.Second*pollTime, "time interval in seconds between each poll")
 	flag.DurationVar(&conf.PoolTimeout, "timeout", time.Second*probeTimeout, "probe timeout in seconds")
-
-	flag.BoolVar(&conf.EnableGRPCMetrics, "enablegrpcmetrics", false, "[DEPRECATED] enable grpc metrics")
-	flag.StringVar(
-		&conf.HistogramOption,
-		"histogramoption",
-		"0.5,2,6",
-		"[DEPRECATED] Histogram option for grpc metrics, should be comma separated value, "+
-			"ex:= 0.5,2,6 where start=0.5 factor=2, count=6")
+	flag.DurationVar(
+		&conf.LogSlowOpInterval,
+		"logslowopinterval",
+		time.Second*30,
+		"how often to inform about slow gRPC calls")
 
 	flag.UintVar(
 		&conf.RbdHardMaxCloneDepth,
@@ -210,7 +213,7 @@ func main() {
 
 	setPIDLimit(&conf)
 
-	if conf.EnableGRPCMetrics || conf.Vtype == livenessType {
+	if conf.EnableProfiling || conf.Vtype == livenessType {
 		// validate metrics endpoint
 		conf.MetricsIP = os.Getenv("POD_IP")
 
@@ -232,7 +235,7 @@ func main() {
 	switch conf.Vtype {
 	case rbdType:
 		validateCloneDepthFlag(&conf)
-		validateMaxSnaphostFlag(&conf)
+		validateMaxSnapshotFlag(&conf)
 		driver := rbddriver.NewDriver()
 		driver.Run(&conf)
 
@@ -252,6 +255,7 @@ func main() {
 			DriverName:  dname,
 			Namespace:   conf.DriverNamespace,
 			ClusterName: conf.ClusterName,
+			InstanceID:  conf.InstanceID,
 			SetMetadata: conf.SetMetadata,
 		}
 		// initialize all controllers before starting.
@@ -291,6 +295,7 @@ func setPIDLimit(conf *util.Config) {
 func initControllers() {
 	// Add list of controller here.
 	persistentvolume.Init()
+	volumegroup.Init()
 }
 
 func validateCloneDepthFlag(conf *util.Config) {
@@ -304,7 +309,7 @@ func validateCloneDepthFlag(conf *util.Config) {
 	}
 }
 
-func validateMaxSnaphostFlag(conf *util.Config) {
+func validateMaxSnapshotFlag(conf *util.Config) {
 	// maximum number of snapshots on an image are 510 [1] and 16 images in
 	// a parent/child chain [2],keeping snapshot limit to 500 to avoid issues.
 	// [1] https://github.com/torvalds/linux/blob/master/drivers/block/rbd.c#L98

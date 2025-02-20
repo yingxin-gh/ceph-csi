@@ -41,6 +41,17 @@ func FindPort(pod *v1.Pod, svcPort *v1.ServicePort) (int, error) {
 				}
 			}
 		}
+		// also support sidecar container (initContainer with restartPolicy=Always)
+		for _, container := range pod.Spec.InitContainers {
+			if container.RestartPolicy == nil || *container.RestartPolicy != v1.ContainerRestartPolicyAlways {
+				continue
+			}
+			for _, port := range container.Ports {
+				if port.Name == name && port.Protocol == svcPort.Protocol {
+					return int(port.ContainerPort), nil
+				}
+			}
+		}
 	case intstr.Int:
 		return portName.IntValue(), nil
 	}
@@ -257,7 +268,7 @@ func visitContainerConfigmapNames(container *v1.Container, visitor Visitor) bool
 }
 
 // GetContainerStatus extracts the status of container "name" from "statuses".
-// It also returns if "name" exists.
+// It returns true if "name" exists, else returns false.
 func GetContainerStatus(statuses []v1.ContainerStatus, name string) (v1.ContainerStatus, bool) {
 	for i := range statuses {
 		if statuses[i].Name == name {
@@ -272,6 +283,17 @@ func GetContainerStatus(statuses []v1.ContainerStatus, name string) (v1.Containe
 func GetExistingContainerStatus(statuses []v1.ContainerStatus, name string) v1.ContainerStatus {
 	status, _ := GetContainerStatus(statuses, name)
 	return status
+}
+
+// GetIndexOfContainerStatus gets the index of status of container "name" from "statuses",
+// It returns (index, true) if "name" exists, else returns (0, false).
+func GetIndexOfContainerStatus(statuses []v1.ContainerStatus, name string) (int, bool) {
+	for i := range statuses {
+		if statuses[i].Name == name {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // IsPodAvailable returns true if a pod is available; false otherwise.
@@ -383,4 +405,14 @@ func UpdatePodCondition(status *v1.PodStatus, condition *v1.PodCondition) bool {
 	status.Conditions[conditionIndex] = *condition
 	// Return true if one of the fields have changed.
 	return !isEqual
+}
+
+// IsRestartableInitContainer returns true if the container has ContainerRestartPolicyAlways.
+// This function is not checking if the container passed to it is indeed an init container.
+// It is just checking if the container restart policy has been set to always.
+func IsRestartableInitContainer(initContainer *v1.Container) bool {
+	if initContainer == nil || initContainer.RestartPolicy == nil {
+		return false
+	}
+	return *initContainer.RestartPolicy == v1.ContainerRestartPolicyAlways
 }

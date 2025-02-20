@@ -26,6 +26,7 @@ parameters:
    # dataPool: <ec-data-pool>
 
    # (required) Ceph pool into which the RBD image shall be created
+   # (optional) If the topologyConstrainedPools is provided
    # eg: pool: rbdpool
    pool: <rbd-pool-name>
 
@@ -44,7 +45,7 @@ parameters:
    #
    # The default options depend on the csi.storage.k8s.io/fstype setting:
    # - ext4: "-m0 -Enodiscard,lazy_itable_init=1,lazy_journal_init=1"
-   # - xfs: "-onouuid -K"
+   # - xfs: "-K"
    #
    # mkfsOptions: "-m0 -Ediscard -i1024"
 
@@ -100,7 +101,7 @@ parameters:
    # By default host-path /var/log/ceph of node is bind-mounted into
    # csi-rbdplugin pod at /var/log/ceph mount path. This is to configure
    # target bindmount path used inside container for ceph clients logging.
-   # See docs/rbd-nbd.md for available configuration options.
+   # See docs/design/proposals/rbd-nbd.md for available configuration options.
    # cephLogDir: /var/log/ceph
 
    # (optional) ceph client log strategy
@@ -124,7 +125,7 @@ parameters:
    #   "file": Enable file encryption on the mounted filesystem
    #   "block": Encrypt RBD block device
    # When unspecified assume type "block". "file" and "block" are
-   # mutally exclusive.
+   # mutually exclusive.
    # encryptionType: "block"
 
    # (optional) Use external key management system for encryption passphrases by
@@ -161,7 +162,41 @@ parameters:
    # stripeCount: <>
    # (optional) The object size in bytes.
    # objectSize: <>
+
+   # rbd volume QoS.
+   # QoS provides settings for rbd volume read/write iops
+   # and read/write bandwidth. There are 4 base qos parameters
+   # among them, when users apply for a volume capacity equal
+   # to or less than BaseVolSizebytes, use base qos limit.
+   # For the portion of capacity exceeding BaseVolSizebytes,
+   # QoS will be increased in steps set per GiB. If the step
+   # size parameter per GiB is not provided, only base QoS limit
+   # will be used and not associated with capacity size.
+   #
+   # note: currently supports rbd-nbd mounter.
+   #
+   # For more details
+   # (optional) the base limit of read operations per second.
+   # BaseReadIops: <>
+   # (optional) the base limit of write operations per second.
+   # BaseWriteIops: <>
+   # (optional) the base limit of read bytes per second.
+   # BaseReadBytesPerSecond: <>
+   # (optional) the base limit of write bytes per second.
+   # BaseWriteBytesPerSecond: <>
+   # (optional) the limit of read operations per GiB.
+   # ReadIopsPerGiB: <>
+   # (optional) the limit of write operations per GiB.
+   # WriteIopsPerGiB: <>
+   # (optional) the limit of read bytes per GiB.
+   # ReadBpsPerGiB: <>
+   # (optional) the limit of write bytes per GiB.
+   # WriteBpsPerGiB: <>
+   # (optional) min size of volume what use to calc qos beased on capacity.
+   # BaseVolSizeBytes:<>
 reclaimPolicy: Delete
 allowVolumeExpansion: true
+
+# If filesystem is xfs, nouuid will be automatically added to mountOptions
 mountOptions:
    - discard

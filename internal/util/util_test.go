@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -74,11 +74,10 @@ func TestRoundOffBytes(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := RoundOffBytes(ts.args.bytes); got != ts.want {
-				t.Errorf("RoundOffBytes() = %v, want %v", got, ts.want)
+			if got := RoundOffBytes(tt.args.bytes); got != tt.want {
+				t.Errorf("RoundOffBytes() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -138,11 +137,10 @@ func TestRoundOffVolSize(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := RoundOffVolSize(ts.args.size); got != ts.want {
-				t.Errorf("RoundOffVolSize() = %v, want %v", got, ts.want)
+			if got := RoundOffVolSize(tt.args.size); got != tt.want {
+				t.Errorf("RoundOffVolSize() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -233,13 +231,11 @@ func TestMountOptionsAdd(t *testing.T) {
 	}
 
 	for _, moaTest := range moaTests {
-		mt := moaTest
-		moaTest := moaTest
 		t.Run(moaTest.name, func(t *testing.T) {
 			t.Parallel()
-			result := MountOptionsAdd(mt.mountOptions, mt.option...)
-			if result != mt.result {
-				t.Errorf("MountOptionsAdd(): %v, want %v", result, mt.result)
+			result := MountOptionsAdd(moaTest.mountOptions, moaTest.option...)
+			if result != moaTest.result {
+				t.Errorf("MountOptionsAdd(): %v, want %v", result, moaTest.result)
 			}
 		})
 	}
@@ -376,6 +372,16 @@ func TestRoundOffCephFSVolSize(t *testing.T) {
 			4194304, // 4 MiB
 		},
 		{
+			"101MB conversion",
+			101000000,
+			104857600, // 100MiB
+		},
+		{
+			"500MB conversion",
+			500000000,
+			503316480, // 480MiB
+		},
+		{
 			"1023MiB conversion",
 			1072693248,
 			1073741824, // 1024 MiB
@@ -392,11 +398,10 @@ func TestRoundOffCephFSVolSize(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := RoundOffCephFSVolSize(ts.size); got != ts.want {
-				t.Errorf("RoundOffCephFSVolSize() = %v, want %v", got, ts.want)
+			if got := RoundOffCephFSVolSize(tt.size); got != tt.want {
+				t.Errorf("RoundOffCephFSVolSize() = %v, want %v", got, tt.want)
 			}
 		})
 	}

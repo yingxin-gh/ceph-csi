@@ -19,10 +19,13 @@ package pod
 import (
 	"flag"
 	"fmt"
+	"strings"
 
+	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/kubernetes/test/e2e/framework"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	psaapi "k8s.io/pod-security-admission/api"
 	psapolicy "k8s.io/pod-security-admission/policy"
@@ -42,11 +45,11 @@ func NodeOSDistroIs(distro string) bool {
 	return false
 }
 
+const InfiniteSleepCommand = "trap exit TERM; while true; do sleep 1; done"
+
 // GenerateScriptCmd generates the corresponding command lines to execute a command.
 func GenerateScriptCmd(command string) []string {
-	var commands []string
-	commands = []string{"/bin/sh", "-c", command}
-	return commands
+	return []string{"/bin/sh", "-c", command}
 }
 
 // GetDefaultTestImage returns the default test image based on OS.
@@ -111,12 +114,25 @@ func GeneratePodSecurityContext(fsGroup *int64, seLinuxOptions *v1.SELinuxOption
 // GenerateContainerSecurityContext generates the corresponding container security context with the given inputs
 // If the Node OS is windows, currently we will ignore the inputs and return nil.
 // TODO: Will modify it after windows has its own security context
-func GenerateContainerSecurityContext(privileged bool) *v1.SecurityContext {
+func GenerateContainerSecurityContext(level psaapi.Level) *v1.SecurityContext {
 	if NodeOSDistroIs("windows") {
 		return nil
 	}
-	return &v1.SecurityContext{
-		Privileged: &privileged,
+
+	switch level {
+	case psaapi.LevelBaseline:
+		return &v1.SecurityContext{
+			Privileged: pointer.Bool(false),
+		}
+	case psaapi.LevelPrivileged:
+		return &v1.SecurityContext{
+			Privileged: pointer.Bool(true),
+		}
+	case psaapi.LevelRestricted:
+		return GetRestrictedContainerSecurityContext()
+	default:
+		ginkgo.Fail(fmt.Sprintf("unknown k8s.io/pod-security-admission/policy.Level %q", level))
+		panic("not reached")
 	}
 }
 
@@ -141,14 +157,14 @@ const DefaultNonRootUserName = "ContainerUser"
 // Tests that require a specific user ID should override this.
 func GetRestrictedPodSecurityContext() *v1.PodSecurityContext {
 	psc := &v1.PodSecurityContext{
-		RunAsNonRoot:   pointer.BoolPtr(true),
+		RunAsNonRoot:   pointer.Bool(true),
 		RunAsUser:      GetDefaultNonRootUser(),
 		SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeRuntimeDefault},
 	}
 
 	if NodeOSDistroIs("windows") {
 		psc.WindowsOptions = &v1.WindowsSecurityContextOptions{}
-		psc.WindowsOptions.RunAsUserName = pointer.StringPtr(DefaultNonRootUserName)
+		psc.WindowsOptions.RunAsUserName = pointer.String(DefaultNonRootUserName)
 	}
 
 	return psc
@@ -157,7 +173,7 @@ func GetRestrictedPodSecurityContext() *v1.PodSecurityContext {
 // GetRestrictedContainerSecurityContext returns a minimal restricted container security context.
 func GetRestrictedContainerSecurityContext() *v1.SecurityContext {
 	return &v1.SecurityContext{
-		AllowPrivilegeEscalation: pointer.BoolPtr(false),
+		AllowPrivilegeEscalation: pointer.Bool(false),
 		Capabilities:             &v1.Capabilities{Drop: []v1.Capability{"ALL"}},
 	}
 }
@@ -181,7 +197,7 @@ func MixinRestrictedPodSecurity(pod *v1.Pod) error {
 		pod.Spec.SecurityContext = GetRestrictedPodSecurityContext()
 	} else {
 		if pod.Spec.SecurityContext.RunAsNonRoot == nil {
-			pod.Spec.SecurityContext.RunAsNonRoot = pointer.BoolPtr(true)
+			pod.Spec.SecurityContext.RunAsNonRoot = pointer.Bool(true)
 		}
 		if pod.Spec.SecurityContext.RunAsUser == nil {
 			pod.Spec.SecurityContext.RunAsUser = GetDefaultNonRootUser()
@@ -191,7 +207,7 @@ func MixinRestrictedPodSecurity(pod *v1.Pod) error {
 		}
 		if NodeOSDistroIs("windows") && pod.Spec.SecurityContext.WindowsOptions == nil {
 			pod.Spec.SecurityContext.WindowsOptions = &v1.WindowsSecurityContextOptions{}
-			pod.Spec.SecurityContext.WindowsOptions.RunAsUserName = pointer.StringPtr(DefaultNonRootUserName)
+			pod.Spec.SecurityContext.WindowsOptions.RunAsUserName = pointer.String(DefaultNonRootUserName)
 		}
 	}
 	for i := range pod.Spec.Containers {
@@ -240,4 +256,54 @@ func FindPodConditionByType(podStatus *v1.PodStatus, conditionType v1.PodConditi
 		}
 	}
 	return nil
+}
+
+// FindContainerStatusInPod finds a container status by its name in the provided pod
+func FindContainerStatusInPod(pod *v1.Pod, containerName string) *v1.ContainerStatus {
+	for _, containerStatus := range pod.Status.InitContainerStatuses {
+		if containerStatus.Name == containerName {
+			return &containerStatus
+		}
+	}
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.Name == containerName {
+			return &containerStatus
+		}
+	}
+	for _, containerStatus := range pod.Status.EphemeralContainerStatuses {
+		if containerStatus.Name == containerName {
+			return &containerStatus
+		}
+	}
+	return nil
+}
+
+// VerifyCgroupValue verifies that the given cgroup path has the expected value in
+// the specified container of the pod. It execs into the container to retrive the
+// cgroup value and compares it against the expected value.
+func VerifyCgroupValue(f *framework.Framework, pod *v1.Pod, cName, cgPath, expectedCgValue string) error {
+	cmd := fmt.Sprintf("head -n 1 %s", cgPath)
+	framework.Logf("Namespace %s Pod %s Container %s - looking for cgroup value %s in path %s",
+		pod.Namespace, pod.Name, cName, expectedCgValue, cgPath)
+	cgValue, _, err := ExecCommandInContainerWithFullOutput(f, pod.Name, cName, "/bin/sh", "-c", cmd)
+	if err != nil {
+		return fmt.Errorf("failed to find expected value %q in container cgroup %q", expectedCgValue, cgPath)
+	}
+	cgValue = strings.Trim(cgValue, "\n")
+	if cgValue != expectedCgValue {
+		return fmt.Errorf("cgroup value %q not equal to expected %q", cgValue, expectedCgValue)
+	}
+	return nil
+}
+
+// IsPodOnCgroupv2Node checks whether the pod is running on cgroupv2 node.
+// TODO: Deduplicate this function with NPD cluster e2e test:
+// https://github.com/kubernetes/kubernetes/blob/2049360379bcc5d6467769cef112e6e492d3d2f0/test/e2e/node/node_problem_detector.go#L369
+func IsPodOnCgroupv2Node(f *framework.Framework, pod *v1.Pod) bool {
+	cmd := "mount -t cgroup2"
+	out, _, err := ExecCommandInContainerWithFullOutput(f, pod.Name, pod.Spec.Containers[0].Name, "/bin/sh", "-c", cmd)
+	if err != nil {
+		return false
+	}
+	return len(out) != 0
 }

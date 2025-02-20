@@ -17,12 +17,12 @@ limitations under the License.
 package util
 
 import (
+	"context"
 	"encoding/base64"
 	"testing"
 
 	"github.com/ceph/ceph-csi/internal/kms"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,8 +34,8 @@ func TestGenerateNewEncryptionPassphrase(t *testing.T) {
 	// b64Passphrase is URL-encoded, decode to verify the length of the
 	// passphrase
 	passphrase, err := base64.URLEncoding.DecodeString(b64Passphrase)
-	assert.NoError(t, err)
-	assert.Equal(t, defaultEncryptionPassphraseSize, len(passphrase))
+	require.NoError(t, err)
+	require.Len(t, passphrase, defaultEncryptionPassphraseSize)
 }
 
 func TestKMSWorkflow(t *testing.T) {
@@ -46,51 +46,52 @@ func TestKMSWorkflow(t *testing.T) {
 	}
 
 	kmsProvider, err := kms.GetDefaultKMS(secrets)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	require.NotNil(t, kmsProvider)
 
 	ve, err := NewVolumeEncryption("", kmsProvider)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	require.NotNil(t, ve)
-	assert.Equal(t, kms.DefaultKMSType, ve.GetID())
+	require.Equal(t, kms.DefaultKMSType, ve.GetID())
 
 	volumeID := "volume-id"
+	ctx := context.TODO()
 
-	err = ve.StoreNewCryptoPassphrase(volumeID, defaultEncryptionPassphraseSize)
-	assert.NoError(t, err)
+	err = ve.StoreNewCryptoPassphrase(ctx, volumeID, defaultEncryptionPassphraseSize)
+	require.NoError(t, err)
 
-	passphrase, err := ve.GetCryptoPassphrase(volumeID)
-	assert.NoError(t, err)
-	assert.Equal(t, secrets["encryptionPassphrase"], passphrase)
+	passphrase, err := ve.GetCryptoPassphrase(ctx, volumeID)
+	require.NoError(t, err)
+	require.Equal(t, secrets["encryptionPassphrase"], passphrase)
 }
 
 func TestEncryptionType(t *testing.T) {
 	t.Parallel()
-	assert.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("wat?"))
-	assert.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("both"))
-	assert.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("file,block"))
-	assert.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("block,file"))
-	assert.EqualValues(t, EncryptionTypeBlock, ParseEncryptionType("block"))
-	assert.EqualValues(t, EncryptionTypeFile, ParseEncryptionType("file"))
-	assert.EqualValues(t, EncryptionTypeNone, ParseEncryptionType(""))
+	require.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("wat?"))
+	require.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("both"))
+	require.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("file,block"))
+	require.EqualValues(t, EncryptionTypeInvalid, ParseEncryptionType("block,file"))
+	require.EqualValues(t, EncryptionTypeBlock, ParseEncryptionType("block"))
+	require.EqualValues(t, EncryptionTypeFile, ParseEncryptionType("file"))
+	require.EqualValues(t, EncryptionTypeNone, ParseEncryptionType(""))
 
 	for _, s := range []string{"file", "block", ""} {
-		assert.EqualValues(t, s, EncryptionTypeString(ParseEncryptionType(s)))
+		require.EqualValues(t, s, ParseEncryptionType(s).String())
 	}
 }
 
 func TestFetchEncryptionType(t *testing.T) {
 	t.Parallel()
 	volOpts := map[string]string{}
-	assert.EqualValues(t, EncryptionTypeBlock, FetchEncryptionType(volOpts, EncryptionTypeBlock))
-	assert.EqualValues(t, EncryptionTypeFile, FetchEncryptionType(volOpts, EncryptionTypeFile))
-	assert.EqualValues(t, EncryptionTypeNone, FetchEncryptionType(volOpts, EncryptionTypeNone))
+	require.EqualValues(t, EncryptionTypeBlock, FetchEncryptionType(volOpts, EncryptionTypeBlock))
+	require.EqualValues(t, EncryptionTypeFile, FetchEncryptionType(volOpts, EncryptionTypeFile))
+	require.EqualValues(t, EncryptionTypeNone, FetchEncryptionType(volOpts, EncryptionTypeNone))
 	volOpts["encryptionType"] = ""
-	assert.EqualValues(t, EncryptionTypeInvalid, FetchEncryptionType(volOpts, EncryptionTypeNone))
+	require.EqualValues(t, EncryptionTypeInvalid, FetchEncryptionType(volOpts, EncryptionTypeNone))
 	volOpts["encryptionType"] = "block"
-	assert.EqualValues(t, EncryptionTypeBlock, FetchEncryptionType(volOpts, EncryptionTypeNone))
+	require.EqualValues(t, EncryptionTypeBlock, FetchEncryptionType(volOpts, EncryptionTypeNone))
 	volOpts["encryptionType"] = "file"
-	assert.EqualValues(t, EncryptionTypeFile, FetchEncryptionType(volOpts, EncryptionTypeNone))
+	require.EqualValues(t, EncryptionTypeFile, FetchEncryptionType(volOpts, EncryptionTypeNone))
 	volOpts["encryptionType"] = "INVALID"
-	assert.EqualValues(t, EncryptionTypeInvalid, FetchEncryptionType(volOpts, EncryptionTypeNone))
+	require.EqualValues(t, EncryptionTypeInvalid, FetchEncryptionType(volOpts, EncryptionTypeNone))
 }

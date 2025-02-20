@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 
 	cerrors "github.com/ceph/ceph-csi/internal/cephfs/errors"
 	fsutil "github.com/ceph/ceph-csi/internal/cephfs/util"
@@ -32,12 +33,17 @@ import (
 	"github.com/ceph/go-ceph/rados"
 )
 
-// clusterAdditionalInfo contains information regarding if resize is
-// supported in the particular cluster and subvolumegroup is
-// created or not.
-// Subvolumegroup creation and volume resize decisions are
-// taken through this additional cluster information.
-var clusterAdditionalInfo = make(map[string]*localClusterState)
+var (
+	// clusterAdditionalInfo contains information regarding if resize is
+	// supported in the particular cluster and subvolumegroup is
+	// created or not.
+	// Subvolumegroup creation and volume resize decisions are
+	// taken through this additional cluster information.
+	clusterAdditionalInfo = make(map[string]*localClusterState)
+	// clusterAdditionalInfoMutex is used to protect against
+	// concurrent writes.
+	clusterAdditionalInfoMutex = sync.Mutex{}
+)
 
 // Subvolume holds subvolume information. This includes only the needed members
 // from fsAdmin.SubVolumeInfo.
@@ -49,6 +55,8 @@ type Subvolume struct {
 
 // SubVolumeClient is the interface that holds the signature of subvolume methods
 // that interacts with CephFS subvolume API's.
+//
+//nolint:interfacebloat // SubVolumeClient has more than 10 methods, that is ok.
 type SubVolumeClient interface {
 	// GetVolumeRootPathCeph returns the root path of the subvolume.
 	GetVolumeRootPathCeph(ctx context.Context) (string, error)
@@ -67,7 +75,7 @@ type SubVolumeClient interface {
 	// CreateCloneFromSubVolume creates a clone from the subvolume.
 	CreateCloneFromSubvolume(ctx context.Context, parentvolOpt *SubVolume) error
 	// GetCloneState returns the clone state of the subvolume.
-	GetCloneState(ctx context.Context) (cephFSCloneState, error)
+	GetCloneState(ctx context.Context) (*cephFSCloneState, error)
 	// CreateCloneFromSnapshot creates a clone from the subvolume snapshot.
 	CreateCloneFromSnapshot(ctx context.Context, snap Snapshot) error
 	// CleanupSnapshotFromSubvolume removes the snapshot from the subvolume.
@@ -93,6 +101,7 @@ type SubVolume struct {
 	VolID          string   // subvolume id.
 	FsName         string   // filesystem name.
 	SubvolumeGroup string   // subvolume group name where subvolume will be created.
+	RadosNamespace string   // rados namespace where omap data will be stored.
 	Pool           string   // pool name where subvolume will be created.
 	Features       []string // subvolume features.
 	Size           int64    // subvolume size.
@@ -132,7 +141,7 @@ func (s *subVolumeClient) GetVolumeRootPathCeph(ctx context.Context) (string, er
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get the rootpath for the vol %s: %s", s.VolID, err)
 		if errors.Is(err, rados.ErrNotFound) {
-			return "", util.JoinErrors(cerrors.ErrVolumeNotFound, err)
+			return "", fmt.Errorf("Failed as %w (internal %w)", cerrors.ErrVolumeNotFound, err)
 		}
 
 		return "", err
@@ -191,30 +200,24 @@ func (s *subVolumeClient) GetSubVolumeInfo(ctx context.Context) (*Subvolume, err
 type operationState int64
 
 const (
-	unknown operationState = iota
-	supported
+	supported operationState = iota
 	unsupported
 )
 
 type localClusterState struct {
-	// set the enum value i.e., unknown, supported,
+	// set the enum value i.e., supported or
 	// unsupported as per the state of the cluster.
-	resizeState                 operationState
 	subVolMetadataState         operationState
 	subVolSnapshotMetadataState operationState
-	// A cluster can have multiple filesystem for that we need to have a map of
-	// subvolumegroups to check filesystem is created nor not.
-	// set true once a subvolumegroup is created
-	// for corresponding filesystem in a cluster.
-	subVolumeGroupsCreated map[string]bool
 }
 
 func newLocalClusterState(clusterID string) {
 	// verify if corresponding clusterID key is present in the map,
 	// and if not, initialize with default values(false).
+	clusterAdditionalInfoMutex.Lock()
+	defer clusterAdditionalInfoMutex.Unlock()
 	if _, keyPresent := clusterAdditionalInfo[clusterID]; !keyPresent {
 		clusterAdditionalInfo[clusterID] = &localClusterState{}
-		clusterAdditionalInfo[clusterID].subVolumeGroupsCreated = make(map[string]bool)
 	}
 }
 
@@ -229,24 +232,6 @@ func (s *subVolumeClient) CreateVolume(ctx context.Context) error {
 		return err
 	}
 
-	// create subvolumegroup if not already created for the cluster.
-	if !clusterAdditionalInfo[s.clusterID].subVolumeGroupsCreated[s.FsName] {
-		opts := fsAdmin.SubVolumeGroupOptions{}
-		err = ca.CreateSubVolumeGroup(s.FsName, s.SubvolumeGroup, &opts)
-		if err != nil {
-			log.ErrorLog(
-				ctx,
-				"failed to create subvolume group %s, for the vol %s: %s",
-				s.SubvolumeGroup,
-				s.VolID,
-				err)
-
-			return err
-		}
-		log.DebugLog(ctx, "cephfs: created subvolume group %s", s.SubvolumeGroup)
-		clusterAdditionalInfo[s.clusterID].subVolumeGroupsCreated[s.FsName] = true
-	}
-
 	opts := fsAdmin.SubVolumeOptions{
 		Size: fsAdmin.ByteCount(s.Size),
 	}
@@ -258,12 +243,6 @@ func (s *subVolumeClient) CreateVolume(ctx context.Context) error {
 	err = ca.CreateSubVolume(s.FsName, s.SubvolumeGroup, s.VolID, &opts)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to create subvolume %s in fs %s: %s", s.VolID, s.FsName, err)
-
-		if errors.Is(err, rados.ErrNotFound) {
-			// Reset the subVolumeGroupsCreated so that we can try again to create the
-			// subvolumegroup in next request if the error is Not Found.
-			clusterAdditionalInfo[s.clusterID].subVolumeGroupsCreated[s.FsName] = false
-		}
 
 		return err
 	}
@@ -288,39 +267,21 @@ func (s *subVolumeClient) ExpandVolume(ctx context.Context, bytesQuota int64) er
 	return err
 }
 
-// ResizeVolume will try to use ceph fs subvolume resize command to resize the
-// subvolume. If the command is not available as a fallback it will use
-// CreateVolume to resize the subvolume.
+// ResizeVolume will use the ceph fs subvolume resize command to resize the
+// subvolume.
 func (s *subVolumeClient) ResizeVolume(ctx context.Context, bytesQuota int64) error {
-	newLocalClusterState(s.clusterID)
-	// resize subvolume when either it's supported, or when corresponding
-	// clusterID key was not present.
-	if clusterAdditionalInfo[s.clusterID].resizeState == unknown ||
-		clusterAdditionalInfo[s.clusterID].resizeState == supported {
-		fsa, err := s.conn.GetFSAdmin()
-		if err != nil {
-			log.ErrorLog(ctx, "could not get FSAdmin, can not resize volume %s:", s.FsName, err)
+	fsa, err := s.conn.GetFSAdmin()
+	if err != nil {
+		log.ErrorLog(ctx, "could not get FSAdmin, can not resize volume %s:", s.FsName, err)
 
-			return err
-		}
-		_, err = fsa.ResizeSubVolume(s.FsName, s.SubvolumeGroup, s.VolID, fsAdmin.ByteCount(bytesQuota), true)
-		if err == nil {
-			clusterAdditionalInfo[s.clusterID].resizeState = supported
-
-			return nil
-		}
-		var invalid fsAdmin.NotImplementedError
-		// In case the error is other than invalid command return error to the caller.
-		if !errors.As(err, &invalid) {
-			log.ErrorLog(ctx, "failed to resize subvolume %s in fs %s: %s", s.VolID, s.FsName, err)
-
-			return err
-		}
+		return err
 	}
-	clusterAdditionalInfo[s.clusterID].resizeState = unsupported
-	s.Size = bytesQuota
+	_, err = fsa.ResizeSubVolume(s.FsName, s.SubvolumeGroup, s.VolID, fsAdmin.ByteCount(bytesQuota), true)
+	if err != nil {
+		log.ErrorLog(ctx, "failed to resize subvolume %s in fs %s: %s", s.VolID, s.FsName, err)
+	}
 
-	return s.CreateVolume(ctx)
+	return err
 }
 
 // PurgSubVolume removes the subvolume.
@@ -343,10 +304,10 @@ func (s *subVolumeClient) PurgeVolume(ctx context.Context, force bool) error {
 	if err != nil {
 		log.ErrorLog(ctx, "failed to purge subvolume %s in fs %s: %s", s.VolID, s.FsName, err)
 		if strings.Contains(err.Error(), cerrors.VolumeNotEmpty) {
-			return util.JoinErrors(cerrors.ErrVolumeHasSnapshots, err)
+			return fmt.Errorf("Failed as %w (internal %w)", cerrors.ErrVolumeHasSnapshots, err)
 		}
 		if errors.Is(err, rados.ErrNotFound) {
-			return util.JoinErrors(cerrors.ErrVolumeNotFound, err)
+			return fmt.Errorf("Failed as %w (internal %w)", cerrors.ErrVolumeNotFound, err)
 		}
 
 		return err

@@ -17,6 +17,7 @@ limitations under the License.
 package kms
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"github.com/hashicorp/vault/api"
 	loss "github.com/libopenstorage/secrets"
 	"github.com/libopenstorage/secrets/vault"
+
+	"github.com/ceph/ceph-csi/internal/util/file"
 )
 
 const (
@@ -123,7 +126,7 @@ func setConfigString(option *string, config map[string]interface{}, key string) 
 // these settings will be used when connecting to the Vault service with
 // vc.connectVault().
 //
-// nolint:gocyclo,cyclop // iterating through many config options, not complex at all.
+//nolint:gocyclo,cyclop // iterating through many config options, not complex at all.
 func (vc *vaultConnection) initConnection(config map[string]interface{}) error {
 	vaultConfig := make(map[string]interface{})
 	keyContext := make(map[string]string)
@@ -268,10 +271,12 @@ func (vc *vaultConnection) initCertificates(config map[string]interface{}, secre
 			return fmt.Errorf("missing vault CA in secret %s", vaultCAFromSecret)
 		}
 
-		vaultConfig[api.EnvVaultCACert], err = createTempFile("vault-ca-cert", []byte(caPEM))
+		tf, err := file.CreateTempFile("vault-ca-cert", caPEM)
 		if err != nil {
 			return fmt.Errorf("failed to create temporary file for Vault CA: %w", err)
 		}
+		vaultConfig[api.EnvVaultCACert] = tf.Name()
+
 		// update the existing config
 		for key, value := range vaultConfig {
 			vc.vaultConfig[key] = value
@@ -300,7 +305,7 @@ func (vc *vaultConnection) Destroy() {
 		tmpFile, ok := vc.vaultConfig[api.EnvVaultCACert]
 		if ok {
 			// ignore error on failure to remove tmpfile (gosec complains)
-			//nolint:forcetypeassert // ignore error on failure to remove tmpfile
+			//nolint:forcetypeassert,errcheck // ignore error on failure to remove tmpfile
 			_ = os.Remove(tmpFile.(string))
 		}
 	}
@@ -395,8 +400,9 @@ func initVaultKMS(args ProviderInitArgs) (EncryptionKMS, error) {
 
 // FetchDEK returns passphrase from Vault. The passphrase is stored in a
 // data.data.passphrase structure.
-func (kms *vaultKMS) FetchDEK(key string) (string, error) {
-	s, err := kms.secrets.GetSecret(filepath.Join(kms.vaultPassphrasePath, key), kms.keyContext)
+func (kms *vaultKMS) FetchDEK(ctx context.Context, key string) (string, error) {
+	// Since the second return variable loss.Version is not used, there it is ignored.
+	s, _, err := kms.secrets.GetSecret(filepath.Join(kms.vaultPassphrasePath, key), kms.keyContext)
 	if err != nil {
 		return "", err
 	}
@@ -414,7 +420,7 @@ func (kms *vaultKMS) FetchDEK(key string) (string, error) {
 }
 
 // StoreDEK saves new passphrase in Vault.
-func (kms *vaultKMS) StoreDEK(key, value string) error {
+func (kms *vaultKMS) StoreDEK(ctx context.Context, key, value string) error {
 	data := map[string]interface{}{
 		"data": map[string]string{
 			"passphrase": value,
@@ -422,7 +428,8 @@ func (kms *vaultKMS) StoreDEK(key, value string) error {
 	}
 
 	pathKey := filepath.Join(kms.vaultPassphrasePath, key)
-	err := kms.secrets.PutSecret(pathKey, data, kms.keyContext)
+	// Since the first return variable loss.Version is not used, there it is ignored.
+	_, err := kms.secrets.PutSecret(pathKey, data, kms.keyContext)
 	if err != nil {
 		return fmt.Errorf("saving passphrase at %s request to vault failed: %w", pathKey, err)
 	}
@@ -431,7 +438,7 @@ func (kms *vaultKMS) StoreDEK(key, value string) error {
 }
 
 // RemoveDEK deletes passphrase from Vault.
-func (kms *vaultKMS) RemoveDEK(key string) error {
+func (kms *vaultKMS) RemoveDEK(ctx context.Context, key string) error {
 	pathKey := filepath.Join(kms.vaultPassphrasePath, key)
 	err := kms.secrets.DeleteSecret(pathKey, kms.getDeleteKeyContext())
 	if err != nil {
@@ -476,32 +483,4 @@ func detectAuthMountPath(path string) (string, error) {
 	}
 
 	return authMountPath, nil
-}
-
-// createTempFile writes data to a temporary file that contains the pattern in
-// the filename (see os.CreateTemp for details).
-func createTempFile(pattern string, data []byte) (string, error) {
-	t, err := os.CreateTemp("", pattern)
-	if err != nil {
-		return "", fmt.Errorf("failed to create temporary file: %w", err)
-	}
-
-	// delete the tmpfile on error
-	defer func() {
-		if err != nil {
-			// ignore error on failure to remove tmpfile (gosec complains)
-			_ = os.Remove(t.Name())
-		}
-	}()
-
-	s, err := t.Write(data)
-	if err != nil || s != len(data) {
-		return "", fmt.Errorf("failed to write temporary file: %w", err)
-	}
-	err = t.Close()
-	if err != nil {
-		return "", fmt.Errorf("failed to close temporary file: %w", err)
-	}
-
-	return t.Name(), nil
 }

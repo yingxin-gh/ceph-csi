@@ -20,9 +20,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/ceph/ceph-csi/internal/util"
 
 	rs "github.com/csi-addons/spec/lib/go/reclaimspace"
+	"github.com/stretchr/testify/require"
 )
 
 // TestControllerReclaimSpace is a minimal test for the
@@ -31,7 +32,7 @@ import (
 func TestControllerReclaimSpace(t *testing.T) {
 	t.Parallel()
 
-	controller := NewReclaimSpaceControllerServer()
+	controller := NewReclaimSpaceControllerServer("test.driver", util.NewVolumeLocks())
 
 	req := &rs.ControllerReclaimSpaceRequest{
 		VolumeId: "",
@@ -39,7 +40,7 @@ func TestControllerReclaimSpace(t *testing.T) {
 	}
 
 	_, err := controller.ControllerReclaimSpace(context.TODO(), req)
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 // TestNodeReclaimSpace is a minimal test for the NodeReclaimSpace() procedure.
@@ -48,7 +49,7 @@ func TestControllerReclaimSpace(t *testing.T) {
 func TestNodeReclaimSpace(t *testing.T) {
 	t.Parallel()
 
-	node := NewReclaimSpaceNodeServer()
+	node := NewReclaimSpaceNodeServer(&util.VolumeLocks{})
 
 	req := &rs.NodeReclaimSpaceRequest{
 		VolumeId:         "",
@@ -58,5 +59,5 @@ func TestNodeReclaimSpace(t *testing.T) {
 	}
 
 	_, err := node.NodeReclaimSpace(context.TODO(), req)
-	assert.Error(t, err)
+	require.Error(t, err)
 }

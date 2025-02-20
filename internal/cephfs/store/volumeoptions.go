@@ -26,6 +26,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
+	cephcsi "github.com/ceph/ceph-csi/api/deploy/kubernetes"
 	"github.com/ceph/ceph-csi/internal/cephfs/core"
 	cerrors "github.com/ceph/ceph-csi/internal/cephfs/errors"
 	fsutil "github.com/ceph/ceph-csi/internal/cephfs/util"
@@ -150,6 +151,10 @@ func validateMounter(m string) error {
 	return nil
 }
 
+func (v *VolumeOptions) DetectMounter(options map[string]string) error {
+	return extractMounter(&v.Mounter, options)
+}
+
 func extractMounter(dest *string, options map[string]string) error {
 	if err := extractOptionalOption(dest, "mounter", options); err != nil {
 		return err
@@ -164,10 +169,10 @@ func extractMounter(dest *string, options map[string]string) error {
 	return nil
 }
 
-func GetClusterInformation(options map[string]string) (*util.ClusterInfo, error) {
+func GetClusterInformation(options map[string]string) (*cephcsi.ClusterInfo, error) {
 	clusterID, ok := options["clusterID"]
 	if !ok {
-		err := fmt.Errorf("clusterID must be set")
+		err := errors.New("clusterID must be set")
 
 		return nil, err
 	}
@@ -183,17 +188,25 @@ func GetClusterInformation(options map[string]string) (*util.ClusterInfo, error)
 		return nil, err
 	}
 
+	radosNamespace, err := util.GetCephFSRadosNamespace(util.CsiConfigFile, clusterID)
+	if err != nil {
+		err = fmt.Errorf("failed to fetch rados namespace using clusterID (%s): %w", clusterID, err)
+
+		return nil, err
+	}
+
 	subvolumeGroup, err := util.CephFSSubvolumeGroup(util.CsiConfigFile, clusterID)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch subvolumegroup using clusterID (%s): %w", clusterID, err)
 
 		return nil, err
 	}
-	clusterData := &util.ClusterInfo{
+	clusterData := &cephcsi.ClusterInfo{
 		ClusterID: clusterID,
 		Monitors:  strings.Split(monitors, ","),
 	}
 	clusterData.CephFS.SubvolumeGroup = subvolumeGroup
+	clusterData.CephFS.RadosNamespace = radosNamespace
 
 	return clusterData, nil
 }
@@ -208,9 +221,33 @@ func fmtBackingSnapshotOptionMismatch(optName, expected, actual string) error {
 		optName, actual, expected)
 }
 
+// getVolumeOptions validates the basic required basic options provided in the
+// volume parameters and extract the volumeOptions from volume parameters.
+// It contains the following checks:
+// - clusterID must be set
+// - monitors must be set
+// - fsName must be set.
+func getVolumeOptions(vo map[string]string) (*VolumeOptions, error) {
+	opts := VolumeOptions{}
+	clusterData, err := GetClusterInformation(vo)
+	if err != nil {
+		return nil, err
+	}
+
+	opts.ClusterID = clusterData.ClusterID
+	opts.Monitors = strings.Join(clusterData.Monitors, ",")
+	opts.SubvolumeGroup = clusterData.CephFS.SubvolumeGroup
+	opts.RadosNamespace = clusterData.CephFS.RadosNamespace
+
+	if err = extractOption(&opts.FsName, "fsName", vo); err != nil {
+		return nil, err
+	}
+
+	return &opts, nil
+}
+
 // NewVolumeOptions generates a new instance of volumeOptions from the provided
 // CSI request parameters.
-// nolint:gocyclo,cyclop // TODO: reduce complexity
 func NewVolumeOptions(
 	ctx context.Context,
 	requestName,
@@ -220,20 +257,17 @@ func NewVolumeOptions(
 	cr *util.Credentials,
 ) (*VolumeOptions, error) {
 	var (
-		opts                VolumeOptions
+		opts                *VolumeOptions
 		backingSnapshotBool string
 		err                 error
 	)
 
 	volOptions := req.GetParameters()
-	clusterData, err := GetClusterInformation(volOptions)
+	opts, err = getVolumeOptions(volOptions)
 	if err != nil {
 		return nil, err
 	}
 
-	opts.ClusterID = clusterData.ClusterID
-	opts.Monitors = strings.Join(clusterData.Monitors, ",")
-	opts.SubvolumeGroup = clusterData.CephFS.SubvolumeGroup
 	opts.Owner = k8s.GetOwner(volOptions)
 	opts.BackingSnapshot = IsShallowVolumeSupported(req)
 
@@ -242,10 +276,6 @@ func NewVolumeOptions(
 	}
 
 	if err = extractMounter(&opts.Mounter, volOptions); err != nil {
-		return nil, err
-	}
-
-	if err = extractOption(&opts.FsName, "fsName", volOptions); err != nil {
 		return nil, err
 	}
 
@@ -321,21 +351,21 @@ func NewVolumeOptions(
 		}
 	}
 
-	return &opts, nil
+	return opts, nil
 }
 
 // IsShallowVolumeSupported returns true only for ReadOnly volume requests
 // with datasource as snapshot.
 func IsShallowVolumeSupported(req *csi.CreateVolumeRequest) bool {
-	isRO := IsVolumeCreateRO(req.VolumeCapabilities)
+	isRO := IsVolumeCreateRO(req.GetVolumeCapabilities())
 
 	return isRO && (req.GetVolumeContentSource() != nil && req.GetVolumeContentSource().GetSnapshot() != nil)
 }
 
 func IsVolumeCreateRO(caps []*csi.VolumeCapability) bool {
 	for _, cap := range caps {
-		if cap.AccessMode != nil {
-			switch cap.AccessMode.Mode { //nolint:exhaustive // only check what we want
+		if cap.GetAccessMode() != nil {
+			switch cap.GetAccessMode().GetMode() { //nolint:exhaustive // only check what we want
 			case csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
 				csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY:
 				return true
@@ -348,7 +378,8 @@ func IsVolumeCreateRO(caps []*csi.VolumeCapability) bool {
 
 // newVolumeOptionsFromVolID generates a new instance of volumeOptions and VolumeIdentifier
 // from the provided CSI VolumeID.
-// nolint:gocyclo,cyclop // TODO: reduce complexity
+//
+//nolint:gocyclo,cyclop // TODO: reduce complexity
 func NewVolumeOptionsFromVolID(
 	ctx context.Context,
 	volID string,
@@ -368,7 +399,7 @@ func NewVolumeOptionsFromVolID(
 	if err != nil {
 		err = fmt.Errorf("error decoding volume ID (%s): %w", volID, err)
 
-		return nil, nil, util.JoinErrors(cerrors.ErrInvalidVolID, err)
+		return nil, nil, fmt.Errorf("Failed as %w (internal %w)", cerrors.ErrInvalidVolID, err)
 	}
 	volOptions.ClusterID = vi.ClusterID
 	vid.VolumeID = volID
@@ -381,6 +412,10 @@ func NewVolumeOptionsFromVolID(
 
 	if volOptions.SubvolumeGroup, err = util.CephFSSubvolumeGroup(util.CsiConfigFile, vi.ClusterID); err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch subvolumegroup list using clusterID (%s): %w", vi.ClusterID, err)
+	}
+
+	if volOptions.RadosNamespace, err = util.GetCephFSRadosNamespace(util.CsiConfigFile, vi.ClusterID); err != nil {
+		return nil, nil, fmt.Errorf("failed to fetch rados namespace using clusterID (%s): %w", vi.ClusterID, err)
 	}
 
 	cr, err := util.NewAdminCredentials(secrets)
@@ -412,8 +447,7 @@ func NewVolumeOptionsFromVolID(
 		return nil, nil, err
 	}
 
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := VolJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := VolJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -540,9 +574,10 @@ func (vo *VolumeOptions) populateVolumeOptionsFromBackingSnapshot(
 		return fmtBackingSnapshotOptionMismatch("clusterID", vo.ClusterID, parentBackingSnapVolOpts.ClusterID)
 	}
 
-	if vo.Pool != "" {
-		return errors.New("cannot set pool for snapshot-backed volume")
-	}
+	// Pool parameter is optional and only used to set 'pool_layout' argument for
+	// subvolume and subvolume clone create commands.
+	// Setting this to empty since it is not used with Snapshot-backed volume.
+	vo.Pool = ""
 
 	if vo.MetadataPool != parentBackingSnapVolOpts.MetadataPool {
 		return fmtBackingSnapshotOptionMismatch("MetadataPool", vo.MetadataPool, parentBackingSnapVolOpts.MetadataPool)
@@ -593,7 +628,7 @@ func NewVolumeOptionsFromMonitorList(
 	// check if there are mon values in secret and if so override option retrieved monitors from
 	// monitors in the secret
 	mon, err := util.GetMonValFromSecret(secrets)
-	if err == nil && len(mon) > 0 {
+	if err == nil && mon != "" {
 		opts.Monitors = mon
 	}
 
@@ -693,7 +728,7 @@ func NewVolumeOptionsFromStaticVolume(
 		return nil, nil, err
 	}
 
-	if err = extractOption(&opts.FsName, "fsName", options); err != nil {
+	if err = extractOptionalOption(&opts.FsName, "fsName", options); err != nil {
 		return nil, nil, err
 	}
 
@@ -765,6 +800,13 @@ func NewSnapshotOptionsFromID(
 			err)
 	}
 
+	if volOptions.RadosNamespace, err = util.GetCephFSRadosNamespace(util.CsiConfigFile, vi.ClusterID); err != nil {
+		return &volOptions, nil, &sid, fmt.Errorf(
+			"failed to fetch rados namespace using clusterID (%s): %w",
+			vi.ClusterID,
+			err)
+	}
+
 	err = volOptions.Connect(cr)
 	if err != nil {
 		return &volOptions, nil, &sid, err
@@ -789,8 +831,7 @@ func NewSnapshotOptionsFromID(
 		return &volOptions, nil, &sid, err
 	}
 
-	// Connect to cephfs' default radosNamespace (csi)
-	j, err := SnapJournal.Connect(volOptions.Monitors, fsutil.RadosNamespace, cr)
+	j, err := SnapJournal.Connect(volOptions.Monitors, volOptions.RadosNamespace, cr)
 	if err != nil {
 		return &volOptions, nil, &sid, err
 	}
@@ -897,7 +938,7 @@ func IsEncrypted(ctx context.Context, volOptions map[string]string) (bool, error
 
 // CopyEncryptionConfig copies passphrases and initializes a fresh
 // Encryption struct if necessary from (vo, vID) to (cp, cpVID).
-func (vo *VolumeOptions) CopyEncryptionConfig(cp *VolumeOptions, vID, cpVID string) error {
+func (vo *VolumeOptions) CopyEncryptionConfig(ctx context.Context, cp *VolumeOptions, vID, cpVID string) error {
 	var err error
 
 	if !vo.IsEncrypted() {
@@ -912,7 +953,7 @@ func (vo *VolumeOptions) CopyEncryptionConfig(cp *VolumeOptions, vID, cpVID stri
 	if cp.Encryption == nil {
 		cp.Encryption, err = util.NewVolumeEncryption(vo.Encryption.GetID(), vo.Encryption.KMS)
 		if errors.Is(err, util.ErrDEKStoreNeeded) {
-			_, err := vo.Encryption.KMS.GetSecret("")
+			_, err := vo.Encryption.KMS.GetSecret(ctx, "")
 			if errors.Is(err, kmsapi.ErrGetSecretUnsupported) {
 				return err
 			}
@@ -920,13 +961,13 @@ func (vo *VolumeOptions) CopyEncryptionConfig(cp *VolumeOptions, vID, cpVID stri
 	}
 
 	if vo.Encryption.KMS.RequiresDEKStore() == kmsapi.DEKStoreIntegrated {
-		passphrase, err := vo.Encryption.GetCryptoPassphrase(vID)
+		passphrase, err := vo.Encryption.GetCryptoPassphrase(ctx, vID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch passphrase for %q (%+v): %w",
 				vID, vo, err)
 		}
 
-		err = cp.Encryption.StoreCryptoPassphrase(cpVID, passphrase)
+		err = cp.Encryption.StoreCryptoPassphrase(ctx, cpVID, passphrase)
 		if err != nil {
 			return fmt.Errorf("failed to store passphrase for %q (%+v): %w",
 				cpVID, cp, err)
@@ -958,7 +999,7 @@ func (vo *VolumeOptions) ConfigureEncryption(
 		// store. Since not all "metadata" KMS support
 		// GetSecret, test for support here. Postpone any
 		// other error handling
-		_, err := vo.Encryption.KMS.GetSecret("")
+		_, err := vo.Encryption.KMS.GetSecret(ctx, "")
 		if errors.Is(err, kmsapi.ErrGetSecretUnsupported) {
 			return err
 		}

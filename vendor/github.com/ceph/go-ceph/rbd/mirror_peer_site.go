@@ -1,5 +1,5 @@
-//go:build !nautilus && ceph_preview
-// +build !nautilus,ceph_preview
+//go:build !nautilus
+// +build !nautilus
 
 package rbd
 
@@ -26,8 +26,8 @@ import (
 //								 const char *site_name,
 //								 const char *client_name);
 func AddMirrorPeerSite(ioctx *rados.IOContext, siteName string, clientName string,
-	direction MirrorPeerDirection) (string, error) {
-
+	direction MirrorPeerDirection,
+) (string, error) {
 	var (
 		err   error
 		buf   []byte
@@ -78,7 +78,6 @@ func RemoveMirrorPeerSite(ioctx *rados.IOContext, uuid string) error {
 //											size_t *max_key_len, char *values, size_t *max_val_len,
 //											size_t *key_value_count);
 func GetAttributesMirrorPeerSite(ioctx *rados.IOContext, uuid string) (map[string]string, error) {
-
 	var (
 		err     error
 		keys    []byte
@@ -149,14 +148,15 @@ func SetAttributesMirrorPeerSite(ioctx *rados.IOContext, uuid string, attributes
 	return getError(ret)
 }
 
-// MirrorPeerSite contains information about a mirroring peer site.
+// MirrorPeerSite is go equivalent of rbd_mirror_peer_site_t struct and contains information
+// about a mirroring peer site. Here, we are ignoring the "last_seen" as this property is redundant
+// and not updated in the ceph API. Related Ceph issue: https://tracker.ceph.com/issues/59581
 type MirrorPeerSite struct {
 	UUID       string
 	Direction  MirrorPeerDirection
 	SiteName   string
 	MirrorUUID string
 	ClientName string
-	LastSeen   C.time_t
 }
 
 // ListMirrorPeerSite returns the list of peer sites
